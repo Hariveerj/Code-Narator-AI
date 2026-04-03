@@ -12,9 +12,9 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 try:
-    from .ollama_client import OllamaClientError, analyze_code
+    from .ollama_client import OllamaClientError, analyze_code, precheck_ollama
 except ImportError:
-    from ollama_client import OllamaClientError, analyze_code
+    from ollama_client import OllamaClientError, analyze_code, precheck_ollama
 
 BASE_DIR     = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
@@ -38,6 +38,12 @@ _jobs: dict[str, asyncio.Queue] = {}
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/health/ollama")
+def ollama_health() -> dict[str, object]:
+    ok, message = precheck_ollama()
+    return {"status": "ok" if ok else "error", "ok": ok, "message": message}
 
 
 # ── Upload endpoint (returns job_id) ────────────────────────────────────────

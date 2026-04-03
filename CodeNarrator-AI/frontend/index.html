@@ -104,6 +104,19 @@
         <span class="btn-label">Analyze Code</span>
       </button>
 
+      <div class="health-gate" id="healthGate" aria-live="polite">
+        <span class="gate-pill pending" id="ollamaGate">Ollama: Checking...</span>
+        <span class="gate-pill pending" id="backendGate">Backend: Checking...</span>
+      </div>
+
+      <div class="analysis-tracker hidden" id="analysisTracker">
+        <div class="analysis-rows" id="analysisRows"></div>
+        <div class="analysis-footer">
+          <span id="analysisCount">Total Completed: 0 / 0</span>
+          <span id="analysisOverall">Overall Progress: 0%</span>
+        </div>
+      </div>
+
       <div class="progress-wrap hidden" id="progressWrap">
         <div class="progress-bar" id="progressBar"></div>
       </div>

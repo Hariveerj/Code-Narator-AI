@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -51,6 +53,7 @@ OLLAMA_MODEL         = "llama3.2:3b"
 UPLOAD_TIMEOUT_SECS  = 30
 STREAM_TIMEOUT_SECS  = 180
 RETRY_WAIT_SECS      = 2
+TIMEOUT_STEP_SECS    = 30
 
 
 # ── Pre-check helpers ────────────────────────────────────────────────────────
@@ -64,12 +67,25 @@ def check_ollama() -> None:
         resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=10)
         resp.raise_for_status()
     except requests.exceptions.ConnectionError:
-        print(
-            f"  ERROR: Cannot reach Ollama at {OLLAMA_BASE_URL}.\n"
-            "  Fix : run  ollama serve  in a separate terminal.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        print("  WARN: Ollama not reachable. Attempting: ollama run llama3.2:3b", flush=True)
+        try:
+            subprocess.run(
+                ["ollama", "run", OLLAMA_MODEL, "health-check"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            # Re-check after warm-up attempt.
+            resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=10)
+            resp.raise_for_status()
+        except Exception:
+            print(
+                f"  ERROR: Cannot reach Ollama at {OLLAMA_BASE_URL}.\n"
+                "  Fix : run  ollama serve  in a separate terminal.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     except Exception as exc:
         print(f"  ERROR: Ollama health check failed: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -121,13 +137,13 @@ def upload_file(backend: str, filepath: Path) -> str:
     return resp.json()["job_id"]
 
 
-def stream_result(backend: str, job_id: str) -> dict:
+def stream_result(backend: str, job_id: str, timeout_secs: int = STREAM_TIMEOUT_SECS) -> dict:
     """Consume SSE stream for job_id; return final result dict."""
     url = f"{backend}/api/stream/{job_id}"
     result: dict = {}
-    deadline = time.time() + STREAM_TIMEOUT_SECS
+    deadline = time.time() + timeout_secs
 
-    with requests.get(url, stream=True, timeout=STREAM_TIMEOUT_SECS) as resp:
+    with requests.get(url, stream=True, timeout=timeout_secs) as resp:
         resp.raise_for_status()
         for raw_line in resp.iter_lines():
             if time.time() > deadline:
@@ -152,31 +168,35 @@ def stream_result(backend: str, job_id: str) -> dict:
     return result
 
 
-def analyse_file(backend: str, filepath: Path, retries: int) -> tuple[bool, dict | str]:
+def analyse_file(backend: str, filepath: Path, retries: int) -> tuple[bool, dict | str, str]:
     """Upload & stream one file with Run-Test-Fix retry loop.
 
     On any failure: wait RETRY_WAIT_SECS and re-attempt.
-    Returns (ok, result_dict)  or  (False, error_string).
+    Returns (ok, result_dict, traceback_text) or (False, error_string, traceback_text).
     """
     last_err = ""
+    last_trace = ""
     total_attempts = retries + 1  # 1 initial + N retries
 
     for attempt in range(1, total_attempts + 1):
+        timeout_secs = STREAM_TIMEOUT_SECS + ((attempt - 1) * TIMEOUT_STEP_SECS)
         try:
             job_id = upload_file(backend, filepath)
-            result = stream_result(backend, job_id)
-            return True, result
+            result = stream_result(backend, job_id, timeout_secs=timeout_secs)
+            return True, result, ""
         except Exception as exc:
             last_err = str(exc)
+            last_trace = traceback.format_exc()
             if attempt < total_attempts:
                 print(
                     f"    \u21b3 Attempt {attempt}/{total_attempts} failed: "
-                    f"{last_err[:100]} \u2014 retrying in {RETRY_WAIT_SECS}s",
+                    f"{last_err[:100]} \u2014 retrying in {RETRY_WAIT_SECS}s "
+                    f"(stream timeout {timeout_secs}s)",
                     flush=True,
                 )
                 time.sleep(RETRY_WAIT_SECS)
 
-    return False, last_err
+    return False, last_err, last_trace
 
 
 def print_completed(current: int, total: int, filename: str, ok: bool) -> None:
@@ -251,6 +271,7 @@ def main() -> None:
         sys.exit(0)
 
     report_path = Path(__file__).parent / "analysis_report.txt"
+    debug_log_path = Path(__file__).parent / "review_debug.log"
     started_at  = datetime.now()
 
     print("─" * 60)
@@ -261,6 +282,7 @@ def main() -> None:
     print(f"  Backend : {args.backend}")
     print(f"  Retries : {args.retries} per file")
     print(f"  Report  : {report_path}")
+    print(f"  Debug   : {debug_log_path}")
     print(f"  Started : {started_at:%Y-%m-%d %H:%M:%S}")
     print("─" * 60)
 
@@ -268,6 +290,7 @@ def main() -> None:
     failed: list[tuple[str, str]] = []
 
     with report_path.open("w", encoding="utf-8") as log:
+        dbg = debug_log_path.open("w", encoding="utf-8")
         log.write("Code Narrator AI — Analysis Report\n")
         log.write(f"Generated : {started_at:%Y-%m-%d %H:%M:%S}\n")
         log.write(f"Target    : {target}\n")
@@ -280,7 +303,7 @@ def main() -> None:
             rel = filepath.relative_to(target)
             print(f"\nAnalysing [{idx}/{total}]: {rel}", flush=True)
 
-            ok, outcome = analyse_file(args.backend, filepath, args.retries)
+            ok, outcome, trace_text = analyse_file(args.backend, filepath, args.retries)
 
             # ── Required progress format ──────────────────────────────────────
             print_completed(idx, total, str(rel), ok)
@@ -294,6 +317,13 @@ def main() -> None:
                 failed.append((str(rel), str(outcome)))
                 log.write(f"[FAIL] {rel}\n")
                 log.write(f"  Error: {outcome}\n\n")
+                dbg.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] FAIL {rel}\n")
+                dbg.write(f"  Error Type: {type(outcome).__name__}\n")
+                dbg.write(f"  Error: {outcome}\n")
+                if trace_text:
+                    dbg.write("  Traceback:\n")
+                    dbg.write(trace_text + "\n")
+                dbg.write("-" * 70 + "\n")
 
         # ── 5. Final summary ──────────────────────────────────────────────────
         elapsed  = int((datetime.now() - started_at).total_seconds())
@@ -316,6 +346,8 @@ def main() -> None:
         summary = "\n".join(summary_lines) + "\n"
         print(summary)
         log.write(summary)
+        dbg.write(summary)
+        dbg.close()
 
     if failed:
         print(

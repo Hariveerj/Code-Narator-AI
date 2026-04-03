@@ -6,6 +6,8 @@ const BASE =
 
 const UPLOAD_URL = `${BASE}/api/upload`;
 const STREAM_URL = (jobId) => `${BASE}/api/stream/${jobId}`;
+const OLLAMA_HEALTH_URL = `${BASE}/api/health/ollama`;
+const BACKEND_HEALTH_URL = `${BASE}/health`;
 
 /* ── DOM Refs ────────────────────────────────────────────────────── */
 const analyzeBtn    = document.getElementById("analyzeBtn");
@@ -25,6 +27,12 @@ const dropModeLabel = document.getElementById("dropModeLabel");
 const dropHint      = document.getElementById("dropHint");
 const skeletonWrap  = document.getElementById("skeletonWrap");
 const fileProgressEl = document.getElementById("fileProgress");
+const ollamaGate   = document.getElementById("ollamaGate");
+const backendGate  = document.getElementById("backendGate");
+const analysisTracker = document.getElementById("analysisTracker");
+const analysisRows = document.getElementById("analysisRows");
+const analysisCount = document.getElementById("analysisCount");
+const analysisOverall = document.getElementById("analysisOverall");
 
 const panes = {
   explanation: {
@@ -48,29 +56,28 @@ let currentMode    = "file";
 let selectedFiles  = [];
 let lastMermaidText = "";
 let _fpTimer       = null;
+let _health = { ollama: false, backend: false };
 
 /* ── File progress tracker ───────────────────────────────────────── */
 function initFileProgress(files) {
   fileProgressEl.innerHTML = "";
-  if (!files || files.length < 2) { fileProgressEl.classList.add("hidden"); return; }
+  fileProgressEl.classList.add("hidden");
 
-  const header = document.createElement("div");
-  header.className = "fp-header";
-  header.innerHTML = `<span id="fpCount">0</span> / ${files.length} files complete`;
-  fileProgressEl.appendChild(header);
+  analysisRows.innerHTML = "";
+  analysisTracker.classList.toggle("hidden", !files || files.length === 0);
+  const total = files?.length || 0;
+  analysisCount.textContent = `Total Completed: 0 / ${total}`;
+  analysisOverall.textContent = "Overall Progress: 0%";
 
-  const row = document.createElement("div");
-  row.className = "fp-row";
+  if (!files || files.length === 0) return;
   files.forEach((f, i) => {
-    const chip = document.createElement("div");
-    chip.className = "fp-chip";
-    chip.id = `fp-${i}`;
-    const short = f.name.length > 18 ? f.name.slice(0, 16) + "…" : f.name;
-    chip.innerHTML = `<span class="fp-ext">${extIcon(f.name)}</span><span class="fp-name">${short}</span><span class="fp-state">queued</span>`;
-    row.appendChild(chip);
+    const row = document.createElement("div");
+    row.className = "analysis-row";
+    row.id = `ar-${i}`;
+    const name = f.name.length > 58 ? `${f.name.slice(0, 56)}...` : f.name;
+    row.innerHTML = `<span class="analysis-file">${name}</span><span class="analysis-pct">0%</span>`;
+    analysisRows.appendChild(row);
   });
-  fileProgressEl.appendChild(row);
-  fileProgressEl.classList.remove("hidden");
 }
 
 function startFileProgressAnim(_files) {
@@ -79,17 +86,56 @@ function startFileProgressAnim(_files) {
 
 function finishFileProgress(files) {
   if (_fpTimer) { clearInterval(_fpTimer); _fpTimer = null; }
-  if (!files || files.length < 2) return;
-  files.forEach((_, i) => _setChipState(i, "done", "✓ done"));
-  const counter = document.getElementById("fpCount");
-  if (counter) counter.textContent = files.length;
+  if (!files || files.length === 0) return;
+  files.forEach((_, i) => setAnalysisRowProgress(i, 100));
+  setAnalysisFooter(files.length, files.length);
 }
 
-function _setChipState(index, cls, label) {
-  const chip = document.getElementById(`fp-${index}`);
-  if (!chip) return;
-  chip.className = `fp-chip ${cls}`;
-  chip.querySelector(".fp-state").textContent = label;
+function setAnalysisRowProgress(index, percent) {
+  const row = document.getElementById(`ar-${index}`);
+  if (!row) return;
+  const pct = Math.max(0, Math.min(100, Math.round(percent)));
+  row.querySelector(".analysis-pct").textContent = `${pct}%`;
+  row.classList.toggle("done", pct >= 100);
+}
+
+function setAnalysisFooter(completed, total) {
+  const safeTotal = Math.max(total || 0, 1);
+  const pct = Math.round((completed / safeTotal) * 100);
+  analysisCount.textContent = `Total Completed: ${completed} / ${total}`;
+  analysisOverall.textContent = `Overall Progress: ${pct}%`;
+}
+
+async function runHealthChecks() {
+  let ollamaOk = false;
+  let backendOk = false;
+
+  try {
+    const br = await fetch(BACKEND_HEALTH_URL);
+    backendOk = br.ok;
+  } catch {
+    backendOk = false;
+  }
+
+  try {
+    const or = await fetch(OLLAMA_HEALTH_URL);
+    if (or.ok) {
+      const data = await or.json();
+      ollamaOk = Boolean(data.ok);
+    }
+  } catch {
+    ollamaOk = false;
+  }
+
+  _health = { ollama: ollamaOk, backend: backendOk };
+  renderGatePill(backendGate, "Backend", backendOk);
+  renderGatePill(ollamaGate, "Ollama", ollamaOk);
+  updateBtn();
+}
+
+function renderGatePill(el, label, ok) {
+  el.className = `gate-pill ${ok ? "ok" : "fail"}`;
+  el.textContent = `${label}: ${ok ? "Green" : "Blocked"}`;
 }
 
 /* ── Mermaid init ────────────────────────────────────────────────── */
@@ -182,7 +228,13 @@ document.getElementById("clearCodeBtn").addEventListener("click", () => {
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 function isCodeFile(name) {
-  return /\.(py|js|ts|jsx|tsx|java|cs|cpp|c|go|rb|php|swift|kt|rs|txt|html|css|scss|json|yaml|yml|md|sh|bash|vue)$/i.test(name);
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  const supported = new Set([
+    "py", "js", "ts", "jsx", "tsx", "java", "cs", "cpp", "c", "go", "rb",
+    "php", "swift", "kt", "rs", "txt", "html", "css", "scss", "json", "yaml",
+    "yml", "md", "sh", "bash", "vue"
+  ]);
+  return supported.has(ext);
 }
 
 function formatBytes(bytes) {
@@ -225,9 +277,10 @@ function renderFileList(files) {
 }
 
 function updateBtn() {
-  const ready = currentMode === "paste"
+  const hasInput = currentMode === "paste"
     ? codeInput.value.trim().length > 0
     : selectedFiles.length > 0;
+  const ready = hasInput && _health.ollama && _health.backend;
   analyzeBtn.disabled = !ready;
 }
 
@@ -247,6 +300,13 @@ document.querySelectorAll(".rtab").forEach(tab => {
 analyzeBtn.addEventListener("click", runAnalysis);
 
 async function runAnalysis() {
+  await runHealthChecks();
+  if (!_health.ollama || !_health.backend) {
+    setStatus("Health checks failed. Ensure backend and Ollama are both Green.", true);
+    updateResultBadge("Blocked", "error");
+    return;
+  }
+
   setLoading(true);
 
   const form = new FormData();
@@ -310,15 +370,18 @@ async function consumeStream(jobId, files) {
         progressBar.classList.remove("indeterminate");
         setStatus(`Checking: ${filename} [${current}/${tot}]`, false, true);
 
-        // Update file-progress chips
-        if (current > 1) _setChipState(current - 2, "done", "✓");
-        _setChipState(current - 1, "analyzing", "…");
-        const counter = document.getElementById("fpCount");
-        if (counter) counter.textContent = current - 1;
+        // Update row tracker + footer
+        if (current > 1) setAnalysisRowProgress(current - 2, 100);
+        setAnalysisRowProgress(current - 1, 60);
+        setAnalysisFooter(current - 1, tot);
 
       } else if (msg.type === "analyzing") {
         progressBar.style.width = "85%";
         setStatus("Running AI analysis…", false, true);
+        if (total > 0) {
+          setAnalysisRowProgress(total - 1, 100);
+          setAnalysisFooter(total, total);
+        }
 
       } else if (msg.type === "result") {
         progressBar.style.width = "100%";
@@ -351,6 +414,11 @@ async function consumeStream(jobId, files) {
     };
   });
 }
+
+// Initial gate check on load
+runHealthChecks().catch(() => {
+  setStatus("Health check failed. Verify backend and Ollama.", true);
+});
 
 /* ── Render results ──────────────────────────────────────────────── */
 function renderResults({ explanation, steps, mermaid: mermaidText }) {
@@ -406,8 +474,8 @@ async function renderMermaid(raw, container) {
     // One auto-fix pass: collapse inline semicolons between node declarations
     try {
       const fixed = code
-        .replace(/;(\s+)([A-Za-z])/g, "\n$2")  // semicolons as newlines
-        .replace(/;\s*$/gm, "");                // trailing semicolons
+        .replaceAll(/;(\s+)([A-Za-z])/g, "\n$2")  // semicolons as newlines
+        .replaceAll(/;\s*$/gm, "");                // trailing semicolons
       const { svg } = await mermaid.render(id + "b", fixed);
       container.innerHTML = svg;
     } catch {

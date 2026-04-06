@@ -27,7 +27,7 @@ COPY frontend/ ./frontend/
 COPY scripts/ ./scripts/
 COPY app.py .
 COPY entrypoint.sh .
-RUN chmod +x entrypoint.sh
+RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
 
 # Ollama talks on 11434 internally; app on 8081
 ENV OLLAMA_BASE_URL=http://localhost:11434 \

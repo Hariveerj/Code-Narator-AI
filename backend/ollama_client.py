@@ -250,7 +250,7 @@ def analyze_code(code: str) -> Dict[str, object]:
         raise OllamaClientError("Ollama returned an empty response.")
 
     try:
-        parsed = parse_model_json(model_output)
+        parsed = parse_model_json(model_output, safe_code)
         _cache_set(cache_key, parsed)
         return parsed
     except Exception as exc:  # noqa: BLE001 - include response context in error

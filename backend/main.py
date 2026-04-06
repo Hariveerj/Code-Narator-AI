@@ -94,48 +94,98 @@ async def _process_job(
     file_data: list[tuple[str, bytes]],
     code_text: str | None,
 ) -> None:
-    """Background task: walks files one-by-one, emits SSE progress, runs Ollama."""
+    """Background task: walks files in batches, emits SSE progress, runs Ollama."""
     queue = _jobs.get(job_id)
     if not queue:
         return
 
+    BATCH_SIZE = int(os.getenv("BATCH_SIZE", "10"))
+
     try:
-        total = len(file_data)
-        parts: list[str] = []
-
-        for idx, (filename, raw) in enumerate(file_data, start=1):
-            # Emit per-file progress event
-            await queue.put({
-                "type": "progress",
-                "current": idx,
-                "total": total,
-                "filename": filename,
-            })
-
-            decoded = raw.decode("utf-8", errors="replace").strip()
-            if decoded:
-                header = f"# === File: {filename} ==="
-                parts.append(f"{header}\n{decoded}")
-
-            # Yield control so the event loop can flush SSE to the client
-            await asyncio.sleep(0)
-
-        # Pasted code overrides file content
-        merged = "\n\n".join(parts)
+        # Pasted code → single-shot analysis (no batching needed)
         if code_text and code_text.strip():
-            merged = code_text.strip()
+            await queue.put({"type": "analyzing", "message": "Running AI analysis…"})
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, analyze_code, code_text.strip())
+            await queue.put({"type": "result", **result})
+            return
 
-        if not merged:
+        # Decode files
+        decoded_files: list[tuple[str, str]] = []
+        for filename, raw in file_data:
+            text = raw.decode("utf-8", errors="replace").strip()
+            if text:
+                decoded_files.append((filename, text))
+
+        if not decoded_files:
             await queue.put({"type": "error", "message": "No content provided."})
             return
 
-        await queue.put({"type": "analyzing", "message": "Running AI analysis…"})
+        total_files = len(decoded_files)
 
-        # Run blocking Ollama call in a thread-pool so we don't block the loop
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, analyze_code, merged)
+        # Split into batches
+        batches: list[list[tuple[str, str]]] = []
+        for i in range(0, total_files, BATCH_SIZE):
+            batches.append(decoded_files[i : i + BATCH_SIZE])
 
-        await queue.put({"type": "result", **result})
+        total_batches = len(batches)
+        all_explanations: list[str] = []
+        all_steps: list[str] = []
+        all_security: list[dict[str, str]] = []
+        all_mermaid_nodes: list[str] = []
+
+        for batch_idx, batch in enumerate(batches, start=1):
+            filenames = [f for f, _ in batch]
+            await queue.put({
+                "type": "progress",
+                "current": batch_idx,
+                "total": total_batches,
+                "batch_files": filenames,
+                "message": f"Analyzing batch {batch_idx}/{total_batches} ({len(batch)} files)…",
+            })
+
+            # Build merged code for this batch
+            parts = [f"# === File: {fn} ===\n{code}" for fn, code in batch]
+            merged = "\n\n".join(parts)
+
+            await queue.put({"type": "analyzing", "message": f"Batch {batch_idx}/{total_batches}: Running AI analysis…"})
+
+            loop = asyncio.get_event_loop()
+            try:
+                result = await loop.run_in_executor(None, analyze_code, merged)
+            except OllamaClientError as exc:
+                await queue.put({
+                    "type": "batch_error",
+                    "batch": batch_idx,
+                    "message": f"Batch {batch_idx} failed: {exc}",
+                })
+                continue
+
+            # Accumulate results
+            if result.get("explanation"):
+                all_explanations.append(f"**Batch {batch_idx}** ({', '.join(filenames)}): {result['explanation']}")
+            if result.get("steps"):
+                for step in result["steps"]:
+                    all_steps.append(step)
+            if result.get("security"):
+                for finding in result["security"]:
+                    all_security.append(finding)
+            if result.get("mermaid"):
+                all_mermaid_nodes.append(result["mermaid"])
+
+            await asyncio.sleep(0)
+
+        # Merge all batch results into one final result
+        merged_explanation = "\n\n".join(all_explanations) if all_explanations else "No explanation returned."
+        merged_mermaid = all_mermaid_nodes[0] if all_mermaid_nodes else "flowchart TD\n  A[Start] --> B[No output]"
+
+        await queue.put({
+            "type": "result",
+            "explanation": merged_explanation,
+            "steps": all_steps,
+            "mermaid": merged_mermaid,
+            "security": all_security,
+        })
 
     except OllamaClientError as exc:
         await queue.put({"type": "error", "message": str(exc)})
@@ -157,7 +207,7 @@ async def stream_job(job_id: str):
         try:
             while True:
                 try:
-                    item = await asyncio.wait_for(queue.get(), timeout=180)
+                    item = await asyncio.wait_for(queue.get(), timeout=600)
                 except asyncio.TimeoutError:
                     yield f'data: {json.dumps({"type": "error", "message": "Job timed out."})}\n\n'
                     break

@@ -368,12 +368,13 @@ async function consumeStream(jobId, files) {
       try { msg = JSON.parse(ev.data); } catch { return; }
 
       if (msg.type === "progress") {
-        const { current, total: tot, filename } = msg;
+        const { current, total: tot, message: progressMsg, batch_files } = msg;
         // Live progress bar (0–80%)
         const pct = Math.round((current / tot) * 80);
         progressBar.style.width = pct + "%";
         progressBar.classList.remove("indeterminate");
-        setStatus(`Checking: ${filename} [${current}/${tot}]`, false, true);
+        const label = progressMsg || `Batch ${current}/${tot}`;
+        setStatus(label, false, true);
 
         // Update row tracker + footer
         if (current > 1) setAnalysisRowProgress(current - 2, 100);
@@ -382,11 +383,15 @@ async function consumeStream(jobId, files) {
 
       } else if (msg.type === "analyzing") {
         progressBar.style.width = "85%";
-        setStatus("Running AI analysis…", false, true);
+        setStatus(msg.message || "Running AI analysis…", false, true);
         if (total > 0) {
           setAnalysisRowProgress(total - 1, 100);
           setAnalysisFooter(total, total);
         }
+
+      } else if (msg.type === "batch_error") {
+        // Non-fatal: one batch failed, processing continues
+        setStatus(msg.message || `Batch ${msg.batch} failed, continuing…`, true);
 
       } else if (msg.type === "result") {
         progressBar.style.width = "100%";

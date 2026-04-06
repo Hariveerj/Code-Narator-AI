@@ -35,7 +35,7 @@ OLLAMA_FALLBACK_MODELS = [
     ).split(",")
     if model.strip()
 ]
-OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "60"))
+OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
 
 # Retry settings for transient connection / timeout failures
 _RETRY_ATTEMPTS = 3

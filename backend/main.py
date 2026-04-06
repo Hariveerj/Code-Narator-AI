@@ -6,7 +6,7 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import Annotated, Any, List
+from typing import Annotated, Any, List, cast
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,6 +28,9 @@ _ALLOWED_ORIGINS = [
 ]
 
 logger = logging.getLogger(__name__)
+
+JOB_STREAM_POLL_SECONDS = int(os.getenv("JOB_STREAM_POLL_SECONDS", "15"))
+JOB_STREAM_IDLE_TIMEOUT_SECONDS = int(os.getenv("JOB_STREAM_IDLE_TIMEOUT_SECONDS", "1800"))
 
 app = FastAPI(title="Code Narrator AI", version="2.0.0")
 
@@ -89,6 +92,55 @@ async def upload_for_stream(
     return {"job_id": job_id}
 
 
+def _decode_uploaded_files(file_data: list[tuple[str, bytes]]) -> list[tuple[str, str]]:
+    decoded_files: list[tuple[str, str]] = []
+    for filename, raw in file_data:
+        text = raw.decode("utf-8", errors="replace").strip()
+        if text:
+            decoded_files.append((filename, text))
+    return decoded_files
+
+
+def _build_file_batches(decoded_files: list[tuple[str, str]], batch_size: int) -> list[list[tuple[str, str]]]:
+    return [decoded_files[i : i + batch_size] for i in range(0, len(decoded_files), batch_size)]
+
+
+def _merge_batch_result(
+    result: dict[str, object],
+    batch_idx: int,
+    filenames: list[str],
+    all_explanations: list[str],
+    all_steps: list[str],
+    all_security: list[dict[str, str]],
+    all_mermaid_nodes: list[str],
+) -> None:
+    explanation = str(result.get("explanation", "")).strip()
+    if explanation:
+        all_explanations.append(f"**Batch {batch_idx}** ({', '.join(filenames)}): {explanation}")
+
+    steps = result.get("steps", [])
+    if isinstance(steps, list):
+        for step in cast(list[object], steps):
+            step_text = str(step).strip()
+            if step_text:
+                all_steps.append(step_text)
+
+    security = result.get("security", [])
+    if isinstance(security, list):
+        for finding in cast(list[object], security):
+            if isinstance(finding, dict):
+                finding_map = cast(dict[str, object], finding)
+                all_security.append({
+                    "severity": str(finding_map.get("severity", "INFO")),
+                    "issue": str(finding_map.get("issue", "")),
+                    "detail": str(finding_map.get("detail", "")),
+                })
+
+    mermaid = str(result.get("mermaid", "")).strip()
+    if mermaid:
+        all_mermaid_nodes.append(mermaid)
+
+
 async def _process_job(
     job_id: str,
     file_data: list[tuple[str, bytes]],
@@ -110,23 +162,13 @@ async def _process_job(
             await queue.put({"type": "result", **result})
             return
 
-        # Decode files
-        decoded_files: list[tuple[str, str]] = []
-        for filename, raw in file_data:
-            text = raw.decode("utf-8", errors="replace").strip()
-            if text:
-                decoded_files.append((filename, text))
+        decoded_files = _decode_uploaded_files(file_data)
 
         if not decoded_files:
             await queue.put({"type": "error", "message": "No content provided."})
             return
 
-        total_files = len(decoded_files)
-
-        # Split into batches
-        batches: list[list[tuple[str, str]]] = []
-        for i in range(0, total_files, BATCH_SIZE):
-            batches.append(decoded_files[i : i + BATCH_SIZE])
+        batches = _build_file_batches(decoded_files, BATCH_SIZE)
 
         total_batches = len(batches)
         all_explanations: list[str] = []
@@ -161,17 +203,15 @@ async def _process_job(
                 })
                 continue
 
-            # Accumulate results
-            if result.get("explanation"):
-                all_explanations.append(f"**Batch {batch_idx}** ({', '.join(filenames)}): {result['explanation']}")
-            if result.get("steps"):
-                for step in result["steps"]:
-                    all_steps.append(step)
-            if result.get("security"):
-                for finding in result["security"]:
-                    all_security.append(finding)
-            if result.get("mermaid"):
-                all_mermaid_nodes.append(result["mermaid"])
+            _merge_batch_result(
+                result,
+                batch_idx,
+                filenames,
+                all_explanations,
+                all_steps,
+                all_security,
+                all_mermaid_nodes,
+            )
 
             await asyncio.sleep(0)
 
@@ -204,13 +244,19 @@ async def stream_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found or already consumed.")
 
     async def event_gen():
+        idle_seconds = 0
         try:
             while True:
                 try:
-                    item = await asyncio.wait_for(queue.get(), timeout=600)
+                    item = await asyncio.wait_for(queue.get(), timeout=JOB_STREAM_POLL_SECONDS)
+                    idle_seconds = 0
                 except asyncio.TimeoutError:
-                    yield f'data: {json.dumps({"type": "error", "message": "Job timed out."})}\n\n'
-                    break
+                    idle_seconds += JOB_STREAM_POLL_SECONDS
+                    if idle_seconds >= JOB_STREAM_IDLE_TIMEOUT_SECONDS:
+                        yield f'data: {json.dumps({"type": "error", "message": "Job timed out."})}\n\n'
+                        break
+                    yield ": keepalive\n\n"
+                    continue
 
                 if item is None:
                     yield "data: [DONE]\n\n"

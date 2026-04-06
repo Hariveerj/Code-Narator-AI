@@ -24,6 +24,7 @@ _MOCK_RESULT = {
     "explanation": "This code prints a greeting.",
     "steps": ["Step 1: Define function", "Step 2: Call print"],
     "mermaid": "flowchart TD\n  A([Start]) --> B[Print Hello]\n  B --> C([End])",
+    "security": [],
 }
 
 
@@ -275,6 +276,7 @@ def test_stream_single_file_no_progress_events():
         events = _do_stream(up.json()["job_id"])
 
     prog = [e for e in events if e.get("type") == "progress"]
+    assert len(prog) <= 1, "Single file should produce at most one progress event"
     # Single file: no per-file progress needed (total=1), result should still arrive
     result = [e for e in events if e.get("type") == "result"]
     assert result, "Single file should still yield a result event"

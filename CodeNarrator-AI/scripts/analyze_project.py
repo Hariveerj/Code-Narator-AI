@@ -37,6 +37,8 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
+from typing import Any
+
 import requests
 
 # ── Code file extensions to process ─────────────────────────────────────────
@@ -137,10 +139,10 @@ def upload_file(backend: str, filepath: Path) -> str:
     return resp.json()["job_id"]
 
 
-def stream_result(backend: str, job_id: str, timeout_secs: int = STREAM_TIMEOUT_SECS) -> dict:
+def stream_result(backend: str, job_id: str, timeout_secs: int = STREAM_TIMEOUT_SECS) -> dict[str, Any]:
     """Consume SSE stream for job_id; return final result dict."""
     url = f"{backend}/api/stream/{job_id}"
-    result: dict = {}
+    result: dict[str, Any] = {}
     deadline = time.time() + timeout_secs
 
     with requests.get(url, stream=True, timeout=timeout_secs) as resp:
@@ -168,7 +170,7 @@ def stream_result(backend: str, job_id: str, timeout_secs: int = STREAM_TIMEOUT_
     return result
 
 
-def analyse_file(backend: str, filepath: Path, retries: int) -> tuple[bool, dict | str, str]:
+def analyse_file(backend: str, filepath: Path, retries: int) -> tuple[bool, dict[str, Any] | str, str]:
     """Upload & stream one file with Run-Test-Fix retry loop.
 
     On any failure: wait RETRY_WAIT_SECS and re-attempt.
@@ -213,6 +215,71 @@ def print_completed(current: int, total: int, filename: str, ok: bool) -> None:
     print(f"{pct:.1f}%")
 
 
+def _write_debug_entry(
+    dbg: Any,
+    rel: Path,
+    outcome: dict[str, Any] | str,
+    trace_text: str,
+) -> None:
+    """Append a single failure entry to the debug log."""
+    dbg.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] FAIL {rel}\n")
+    dbg.write(f"  Error Type: {type(outcome).__name__}\n")
+    dbg.write(f"  Error: {outcome}\n")
+    if trace_text:
+        dbg.write("  Traceback:\n")
+        dbg.write(trace_text + "\n")
+    dbg.write("-" * 70 + "\n")
+
+
+def _write_summary(
+    log: Any,
+    dbg: Any,
+    passed: list[str],
+    failed: list[tuple[str, str]],
+    total: int,
+    started_at: datetime,
+) -> None:
+    """Build and write final summary to console, log, and debug file."""
+    elapsed = int((datetime.now() - started_at).total_seconds())
+    pct_pass = 100.0 * len(passed) / total
+
+    summary_lines = [
+        "",
+        "=" * 60,
+        "SUMMARY",
+        f"  Passed  : {len(passed)} / {total} ({pct_pass:.1f}%)",
+        f"  Failed  : {len(failed)} / {total}",
+        f"  Elapsed : {elapsed}s",
+    ]
+    if failed:
+        summary_lines.append("\nFailed files:")
+        for path, err in failed:
+            summary_lines.append(f"  • {path}")
+            summary_lines.append(f"    {err[:120]}")
+
+    summary = "\n".join(summary_lines) + "\n"
+    print(summary)
+    log.write(summary)
+    dbg.write(summary)
+
+
+def _check_backend(backend: str) -> None:
+    """Verify the Code Narrator backend is reachable, exit on failure."""
+    print("Pre-check: verifying Code Narrator backend ...", flush=True)
+    try:
+        hr = requests.get(f"{backend}/health", timeout=5)
+        hr.raise_for_status()
+        print(f"  OK : Backend running at {backend}.\n", flush=True)
+    except Exception as exc:
+        print(
+            f"  ERROR: Backend unreachable at {backend}.\n"
+            "  Fix : start the server with  python app.py\n"
+            f"  Detail: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -249,19 +316,7 @@ def main() -> None:
         check_ollama()
 
     # ── 2. Pre-check: CodeNarrator backend is reachable ──────────────────────
-    print("Pre-check: verifying Code Narrator backend ...", flush=True)
-    try:
-        hr = requests.get(f"{args.backend}/health", timeout=5)
-        hr.raise_for_status()
-        print(f"  OK : Backend running at {args.backend}.\n", flush=True)
-    except Exception as exc:
-        print(
-            f"  ERROR: Backend unreachable at {args.backend}.\n"
-            "  Fix : start the server with  python app.py\n"
-            f"  Detail: {exc}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    _check_backend(args.backend)
 
     # ── 3. Build file queue ───────────────────────────────────────────────────
     files = collect_files(target)
@@ -308,7 +363,7 @@ def main() -> None:
             # ── Required progress format ──────────────────────────────────────
             print_completed(idx, total, str(rel), ok)
 
-            if ok:
+            if ok and isinstance(outcome, dict):
                 passed.append(str(rel))
                 expl = str(outcome.get("explanation", ""))[:300]
                 log.write(f"[PASS] {rel}\n")
@@ -317,36 +372,10 @@ def main() -> None:
                 failed.append((str(rel), str(outcome)))
                 log.write(f"[FAIL] {rel}\n")
                 log.write(f"  Error: {outcome}\n\n")
-                dbg.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] FAIL {rel}\n")
-                dbg.write(f"  Error Type: {type(outcome).__name__}\n")
-                dbg.write(f"  Error: {outcome}\n")
-                if trace_text:
-                    dbg.write("  Traceback:\n")
-                    dbg.write(trace_text + "\n")
-                dbg.write("-" * 70 + "\n")
+                _write_debug_entry(dbg, rel, outcome, trace_text)
 
         # ── 5. Final summary ──────────────────────────────────────────────────
-        elapsed  = int((datetime.now() - started_at).total_seconds())
-        pct_pass = 100.0 * len(passed) / total
-
-        summary_lines = [
-            "",
-            "=" * 60,
-            "SUMMARY",
-            f"  Passed  : {len(passed)} / {total} ({pct_pass:.1f}%)",
-            f"  Failed  : {len(failed)} / {total}",
-            f"  Elapsed : {elapsed}s",
-        ]
-        if failed:
-            summary_lines.append("\nFailed files:")
-            for path, err in failed:
-                summary_lines.append(f"  • {path}")
-                summary_lines.append(f"    {err[:120]}")
-
-        summary = "\n".join(summary_lines) + "\n"
-        print(summary)
-        log.write(summary)
-        dbg.write(summary)
+        _write_summary(log, dbg, passed, failed, total, started_at)
         dbg.close()
 
     if failed:

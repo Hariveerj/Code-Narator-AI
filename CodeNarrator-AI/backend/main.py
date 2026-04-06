@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 import uuid
 from pathlib import Path
-from typing import Annotated, List
+from typing import Annotated, Any, List
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,19 +21,30 @@ except ImportError:
 BASE_DIR     = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 
+_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", "http://localhost:8081,http://127.0.0.1:8081").split(",")
+    if o.strip()
+]
+
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Code Narrator AI", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
 # ── In-memory job store ─────────────────────────────────────────────────────
 # Maps job_id -> asyncio.Queue of SSE event dicts (None = done sentinel)
-_jobs: dict[str, asyncio.Queue] = {}
+_jobs: dict[str, asyncio.Queue[dict[str, Any] | None]] = {}
+
+# Keep references to background tasks so they are not garbage-collected.
+_background_tasks: set[asyncio.Task[None]] = set()
 
 
 # ── Health ──────────────────────────────────────────────────────────────────
@@ -47,7 +60,7 @@ def ollama_health() -> dict[str, object]:
 
 
 # ── Upload endpoint (returns job_id) ────────────────────────────────────────
-@app.post("/api/upload")
+@app.post("/api/upload", responses={400: {"description": "No file/code provided or all files were empty."}})
 async def upload_for_stream(
     files: Annotated[List[UploadFile] | None, File()] = None,
     code_text: Annotated[str | None, Form()] = None,
@@ -67,10 +80,12 @@ async def upload_for_stream(
         raise HTTPException(status_code=400, detail="Provide at least one file or paste code.")
 
     job_id = str(uuid.uuid4())
-    queue: asyncio.Queue = asyncio.Queue()
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     _jobs[job_id] = queue
 
-    asyncio.create_task(_process_job(job_id, file_data, code_text))
+    task = asyncio.create_task(_process_job(job_id, file_data, code_text))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return {"job_id": job_id}
 
 
@@ -131,7 +146,7 @@ async def _process_job(
 
 
 # ── SSE stream endpoint ──────────────────────────────────────────────────────
-@app.get("/api/stream/{job_id}")
+@app.get("/api/stream/{job_id}", responses={404: {"description": "Job not found or already consumed."}})
 async def stream_job(job_id: str):
     """Server-Sent Events stream for a running job."""
     queue = _jobs.get(job_id)
@@ -167,7 +182,7 @@ async def stream_job(job_id: str):
 
 
 # ── Legacy single-shot endpoints (kept for tests / back-compat) ─────────────
-_ANALYZE_RESPONSES = {
+_ANALYZE_RESPONSES: dict[int | str, dict[str, Any]] = {
     400: {"description": "No file/code provided or all files were empty."},
     500: {"description": "Unexpected server error."},
     502: {"description": "Ollama service unavailable or failed."},
@@ -203,7 +218,8 @@ async def analyze(
     except OllamaClientError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"Unexpected server error: {exc}") from exc
+        logger.error("Unexpected server error during analysis", exc_info=exc)
+        raise HTTPException(status_code=500, detail="Internal server error.") from exc
 
 
 @app.post("/api/analyze", responses=_ANALYZE_RESPONSES)

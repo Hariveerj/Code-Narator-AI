@@ -50,6 +50,11 @@ const panes = {
     empty:   document.getElementById("emptyDiagram"),
     content: document.getElementById("diagramWrap"),
   },
+  security: {
+    pane:    document.getElementById("pane-security"),
+    empty:   document.getElementById("emptySecurity"),
+    content: document.getElementById("securityWrap"),
+  },
 };
 
 let currentMode    = "file";
@@ -416,12 +421,14 @@ async function consumeStream(jobId, files) {
 }
 
 // Initial gate check on load
-runHealthChecks().catch(() => {
+try {
+  await runHealthChecks();
+} catch {
   setStatus("Health check failed. Verify backend and Ollama.", true);
-});
+}
 
 /* ── Render results ──────────────────────────────────────────────── */
-function renderResults({ explanation, steps, mermaid: mermaidText }) {
+function renderResults({ explanation, steps, mermaid: mermaidText, security }) {
   /* explanation */
   const expEl = document.getElementById("explanation");
   expEl.textContent = explanation || "No explanation returned.";
@@ -451,8 +458,58 @@ function renderResults({ explanation, steps, mermaid: mermaidText }) {
     });
   }
 
+  /* security */
+  renderSecurity(Array.isArray(security) ? security : []);
+
   /* switch to explanation tab */
   document.querySelector(".rtab[data-pane='explanation']").click();
+}
+
+/* ── Security rendering ──────────────────────────────────────────── */
+const SEVERITY_COLOR = { HIGH: "#dc2626", MEDIUM: "#ea580c", LOW: "#ca8a04", INFO: "#2563eb" };
+
+function renderSecurity(findings) {
+  const wrap    = document.getElementById("securityWrap");
+  const summary = document.getElementById("securitySummary");
+  const list    = document.getElementById("securityList");
+  const empty   = document.getElementById("emptySecurity");
+
+  list.innerHTML    = "";
+  summary.innerHTML = "";
+
+  if (!findings.length) {
+    summary.innerHTML = '<span class="sec-badge sec-ok">No security issues found</span>';
+    empty.classList.add("hidden");
+    wrap.classList.remove("hidden");
+    return;
+  }
+
+  const counts = { HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0 };
+  findings.forEach(f => { counts[f.severity] = (counts[f.severity] || 0) + 1; });
+
+  summary.innerHTML = Object.entries(counts)
+    .filter(([, n]) => n > 0)
+    .map(([sev, n]) => `<span class="sec-badge" style="background:${SEVERITY_COLOR[sev]}">${n} ${sev}</span>`)
+    .join(" ");
+
+  findings.forEach(f => {
+    const li = document.createElement("li");
+    li.className = "sec-finding";
+    li.innerHTML =
+      `<span class="sec-sev" style="background:${SEVERITY_COLOR[f.severity] || '#64748b'}">${f.severity}</span>` +
+      `<strong>${escapeHtml(f.issue)}</strong>` +
+      `<p>${escapeHtml(f.detail)}</p>`;
+    list.appendChild(li);
+  });
+
+  empty.classList.add("hidden");
+  wrap.classList.remove("hidden");
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str || "";
+  return div.innerHTML;
 }
 
 async function renderMermaid(raw, container) {

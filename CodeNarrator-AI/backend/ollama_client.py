@@ -4,6 +4,8 @@ import os
 import time
 from typing import Any, Dict
 
+from urllib.parse import urlparse
+
 import requests
 
 try:
@@ -11,7 +13,18 @@ try:
 except ImportError:
     from utils import build_analysis_prompt, clamp_code_size, parse_model_json
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+_RAW_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+_parsed = urlparse(_RAW_BASE_URL)
+# Allow localhost, loopback, and Docker-internal hostnames (no dots = not routable)
+_hostname = _parsed.hostname or ""
+_is_local = _hostname in ("localhost", "127.0.0.1", "::1")
+_is_docker_internal = "." not in _hostname and _hostname != ""
+if not (_is_local or _is_docker_internal):
+    raise RuntimeError(
+        f"OLLAMA_BASE_URL must point to localhost or a Docker service name, got: {_hostname}. "
+        "Set OLLAMA_BASE_URL=http://localhost:11434 to fix."
+    )
+OLLAMA_BASE_URL = _RAW_BASE_URL
 OLLAMA_URL = os.getenv("OLLAMA_URL", f"{OLLAMA_BASE_URL}/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 OLLAMA_FALLBACK_MODELS = [
@@ -79,6 +92,29 @@ def _try_with_fallback_models(payload: dict[str, Any], initial_model: str) -> di
     return None
 
 
+def _raise_connection_exhausted(exc: Exception) -> None:
+    """Raise OllamaClientError for connection/timeout after retries exhausted."""
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        raise OllamaClientError(
+            f"Could not connect to Ollama after {_RETRY_ATTEMPTS} retries. "
+            "Make sure Ollama is running at http://localhost:11434 and the model is loaded."
+        ) from exc
+    raise OllamaClientError(
+        f"Ollama request timed out after {_RETRY_ATTEMPTS} retries. "
+        "Try a smaller file or increase OLLAMA_TIMEOUT_SECONDS."
+    ) from exc
+
+
+def _handle_http_error(exc: requests.exceptions.HTTPError, payload: dict[str, Any], model_name: str) -> dict[str, Any]:
+    """Handle HTTPError: try fallbacks for model-not-found, else raise."""
+    if _is_model_not_found_error(exc):
+        fallback_data = _try_with_fallback_models(payload, model_name)
+        if fallback_data is not None:
+            return fallback_data
+        raise OllamaClientError(_model_not_found_detail(model_name, exc)) from exc
+    raise OllamaClientError(_http_error_detail(exc)) from exc
+
+
 def _request_ollama(payload: dict[str, Any], model_name: str) -> dict[str, Any]:
     """Call Ollama with automatic retry on transient connection/timeout errors."""
     for attempt in range(1, _RETRY_ATTEMPTS + 2):  # 1 .. RETRY_ATTEMPTS+1 total attempts
@@ -88,23 +124,9 @@ def _request_ollama(payload: dict[str, Any], model_name: str) -> dict[str, Any]:
             if attempt <= _RETRY_ATTEMPTS:
                 time.sleep(_RETRY_WAIT_SECONDS)
                 continue
-            # Retries exhausted — convert to a descriptive OllamaClientError
-            if isinstance(exc, requests.exceptions.ConnectionError):
-                raise OllamaClientError(
-                    f"Could not connect to Ollama after {_RETRY_ATTEMPTS} retries. "
-                    "Make sure Ollama is running at http://localhost:11434 and the model is loaded."
-                ) from exc
-            raise OllamaClientError(
-                f"Ollama request timed out after {_RETRY_ATTEMPTS} retries. "
-                "Try a smaller file or increase OLLAMA_TIMEOUT_SECONDS."
-            ) from exc
+            _raise_connection_exhausted(exc)
         except requests.exceptions.HTTPError as exc:
-            if _is_model_not_found_error(exc):
-                fallback_data = _try_with_fallback_models(payload, model_name)
-                if fallback_data is not None:
-                    return fallback_data
-                raise OllamaClientError(_model_not_found_detail(model_name, exc)) from exc
-            raise OllamaClientError(_http_error_detail(exc)) from exc
+            return _handle_http_error(exc, payload, model_name)
         except requests.exceptions.RequestException as exc:
             raise OllamaClientError(f"Ollama request failed: {exc}") from exc
         except ValueError as exc:

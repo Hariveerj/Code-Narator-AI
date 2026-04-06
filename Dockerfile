@@ -8,8 +8,8 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Install curl (needed by Ollama installer and healthcheck)
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
+# Install curl, zstd, ca-certificates (needed by Ollama installer and healthcheck)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates zstd && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Ollama

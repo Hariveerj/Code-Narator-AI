@@ -1,0 +1,23 @@
+# docker-compose.yml — CodeNarrator-AI (Ollama bundled inside container)
+# Usage:
+#   docker compose up -d          # start the service
+#   docker compose logs -f app    # follow app logs
+#   docker compose down            # stop everything
+
+services:
+  app:
+    build: .
+    container_name: codenarrator-app
+    ports:
+      - "8081:8081"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8081"
+      OLLAMA_BASE_URL: "http://localhost:11434"
+      OLLAMA_MODEL: "llama3.2:3b"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_data:

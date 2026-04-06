@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import time
+from collections import OrderedDict
+from copy import deepcopy
 from typing import Any, Dict
 
 from urllib.parse import urlparse
@@ -36,14 +39,66 @@ OLLAMA_FALLBACK_MODELS = [
     if model.strip()
 ]
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
+OLLAMA_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0"))
+OLLAMA_TOP_P = float(os.getenv("OLLAMA_TOP_P", "0.9"))
+OLLAMA_SEED = int(os.getenv("OLLAMA_SEED", "42"))
+
+ANALYSIS_CACHE_TTL_SECONDS = int(os.getenv("ANALYSIS_CACHE_TTL_SECONDS", "1800"))
+ANALYSIS_CACHE_MAX_ITEMS = int(os.getenv("ANALYSIS_CACHE_MAX_ITEMS", "256"))
+CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "5"))
+CIRCUIT_BREAKER_COOLDOWN_SECONDS = int(os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "30"))
 
 # Retry settings for transient connection / timeout failures
 _RETRY_ATTEMPTS = 3
 _RETRY_WAIT_SECONDS = 2
 
+_analysis_cache: OrderedDict[str, tuple[float, dict[str, object]]] = OrderedDict()
+_consecutive_failures = 0
+_circuit_open_until = 0.0
+
 
 class OllamaClientError(Exception):
     """Raised when the Ollama request or response processing fails."""
+
+
+def _cache_get(cache_key: str) -> dict[str, object] | None:
+    now = time.time()
+    hit = _analysis_cache.get(cache_key)
+    if hit is None:
+        return None
+    ts, value = hit
+    if now - ts > ANALYSIS_CACHE_TTL_SECONDS:
+        _analysis_cache.pop(cache_key, None)
+        return None
+    _analysis_cache.move_to_end(cache_key)
+    return deepcopy(value)
+
+
+def _cache_set(cache_key: str, value: dict[str, object]) -> None:
+    _analysis_cache[cache_key] = (time.time(), deepcopy(value))
+    _analysis_cache.move_to_end(cache_key)
+    while len(_analysis_cache) > ANALYSIS_CACHE_MAX_ITEMS:
+        _analysis_cache.popitem(last=False)
+
+
+def _record_failure() -> None:
+    global _consecutive_failures, _circuit_open_until
+    _consecutive_failures += 1
+    if _consecutive_failures >= CIRCUIT_BREAKER_FAILURE_THRESHOLD:
+        _circuit_open_until = time.time() + CIRCUIT_BREAKER_COOLDOWN_SECONDS
+
+
+def _record_success() -> None:
+    global _consecutive_failures
+    _consecutive_failures = 0
+
+
+def _ensure_circuit_closed() -> None:
+    if time.time() < _circuit_open_until:
+        raise OllamaClientError(
+            "Ollama circuit breaker is open due to repeated failures. "
+            "Please retry in a few seconds."
+        )
 
 
 def _post_generate(payload: dict[str, Any]) -> dict[str, Any]:
@@ -117,19 +172,26 @@ def _handle_http_error(exc: requests.exceptions.HTTPError, payload: dict[str, An
 
 def _request_ollama(payload: dict[str, Any], model_name: str) -> dict[str, Any]:
     """Call Ollama with automatic retry on transient connection/timeout errors."""
+    _ensure_circuit_closed()
     for attempt in range(1, _RETRY_ATTEMPTS + 2):  # 1 .. RETRY_ATTEMPTS+1 total attempts
         try:
-            return _post_generate(payload)
+            data = _post_generate(payload)
+            _record_success()
+            return data
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
             if attempt <= _RETRY_ATTEMPTS:
                 time.sleep(_RETRY_WAIT_SECONDS)
                 continue
+            _record_failure()
             _raise_connection_exhausted(exc)
         except requests.exceptions.HTTPError as exc:
+            _record_failure()
             return _handle_http_error(exc, payload, model_name)
         except requests.exceptions.RequestException as exc:
+            _record_failure()
             raise OllamaClientError(f"Ollama request failed: {exc}") from exc
         except ValueError as exc:
+            _record_failure()
             raise OllamaClientError("Received invalid JSON from Ollama API.") from exc
     # Unreachable — all paths above either return or raise
     raise OllamaClientError("Ollama request failed after all retries.")
@@ -162,12 +224,23 @@ def precheck_ollama() -> tuple[bool, str]:
 
 def analyze_code(code: str) -> Dict[str, object]:
     safe_code = clamp_code_size(code)
+    cache_key = hashlib.sha256(f"{OLLAMA_MODEL}|{safe_code}".encode("utf-8")).hexdigest()
+
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     prompt = build_analysis_prompt(safe_code)
 
     payload: dict[str, Any] = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
+        "options": {
+            "temperature": OLLAMA_TEMPERATURE,
+            "top_p": OLLAMA_TOP_P,
+            "seed": OLLAMA_SEED,
+        },
     }
 
     data = _request_ollama(payload, OLLAMA_MODEL)
@@ -177,7 +250,9 @@ def analyze_code(code: str) -> Dict[str, object]:
         raise OllamaClientError("Ollama returned an empty response.")
 
     try:
-        return parse_model_json(model_output)
+        parsed = parse_model_json(model_output)
+        _cache_set(cache_key, parsed)
+        return parsed
     except Exception as exc:  # noqa: BLE001 - include response context in error
         raise OllamaClientError(
             "Failed to parse model output into expected JSON structure. "

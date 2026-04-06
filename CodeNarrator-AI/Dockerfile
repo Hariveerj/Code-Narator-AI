@@ -1,17 +1,23 @@
 # ── CodeNarrator-AI ──────────────────────────────────────────────────────────
-# Multi-stage build: slim Python image serving FastAPI + static frontend.
-# Expects Ollama to be available at OLLAMA_BASE_URL (default: host network).
+# Single-container build: Ollama + FastAPI app in one image.
 # ─────────────────────────────────────────────────────────────────────────────
 
-FROM python:3.14-slim AS base
+FROM python:3.12-slim
 
 # Prevents .pyc files and enables unbuffered stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+# Install curl (needed by Ollama installer and healthcheck)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Ollama
+RUN curl -fsSL https://ollama.com/install.sh | sh
+
 WORKDIR /app
 
-# Install dependencies first (layer cache)
+# Install Python dependencies first (layer cache)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -20,11 +26,19 @@ COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 COPY scripts/ ./scripts/
 COPY app.py .
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
+
+# Ollama talks on 11434 internally; app on 8081
+ENV OLLAMA_BASE_URL=http://localhost:11434 \
+    OLLAMA_MODEL=llama3.2:3b \
+    HOST=0.0.0.0 \
+    PORT=8081
 
 EXPOSE 8081
 
 # Health check against the built-in /health endpoint
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8081/health').raise_for_status()"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
+    CMD curl -sf http://localhost:8081/health || exit 1
 
-CMD ["python", "app.py"]
+ENTRYPOINT ["./entrypoint.sh"]

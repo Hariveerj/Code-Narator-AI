@@ -1,39 +1,10 @@
-# docker-compose.yml — CodeNarrator-AI + Ollama
+# docker-compose.yml — CodeNarrator-AI (Ollama bundled inside container)
 # Usage:
-#   docker compose up -d          # start both services
+#   docker compose up -d          # start the service
 #   docker compose logs -f app    # follow app logs
 #   docker compose down            # stop everything
 
 services:
-  # ── Ollama LLM engine ──────────────────────────────────────────────────────
-  ollama:
-    image: ollama/ollama:latest
-    container_name: codenarrator-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
-      interval: 15s
-      timeout: 5s
-      start_period: 20s
-      retries: 5
-
-  # ── Pull the default model after Ollama is healthy ─────────────────────────
-  ollama-pull:
-    image: ollama/ollama:latest
-    container_name: codenarrator-ollama-pull
-    depends_on:
-      ollama:
-        condition: service_healthy
-    entrypoint: ["ollama", "pull", "llama3.2:3b"]
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-    restart: "no"
-
-  # ── CodeNarrator-AI backend + frontend ─────────────────────────────────────
   app:
     build: .
     container_name: codenarrator-app
@@ -42,12 +13,10 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "8081"
-      RELOAD: "false"
-      OLLAMA_BASE_URL: "http://ollama:11434"
-      CORS_ORIGINS: "http://localhost:8081,http://127.0.0.1:8081"
-    depends_on:
-      ollama:
-        condition: service_healthy
+      OLLAMA_BASE_URL: "http://localhost:11434"
+      OLLAMA_MODEL: "llama3.2:3b"
+    volumes:
+      - ollama_data:/root/.ollama
     restart: unless-stopped
 
 volumes:

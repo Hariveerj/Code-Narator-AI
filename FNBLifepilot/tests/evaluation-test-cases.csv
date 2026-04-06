@@ -1,0 +1,6 @@
+testName,category,input,expected
+ebucks_query,groundedness,"What is my eBucks level?","Gold Level 3 points"
+balance_query,groundedness,"What is my balance?","cheque savings"
+fraud_check,compliance,"Is there any suspicious activity?","No fraudulent transactions detected"
+transfer_query,completeness,"How do I transfer money?","source destination amount biometric"
+debit_orders,groundedness,"Show me upcoming debit orders","MiWay Vodacom Netflix due"

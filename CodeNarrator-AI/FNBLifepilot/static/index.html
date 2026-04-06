@@ -1,0 +1,468 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BNF LifePilot — Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0a0e17;--card:#131a2b;--border:#1e2a3a;--teal:#009688;--accent:#4fc3f7;
+--text:#e0e0e0;--dim:#8899aa;--green:#00a651;--red:#e53935;--orange:#ff9800;--gold:#ffd600}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+.header{background:linear-gradient(135deg,#003d4d,#006a5e);padding:18px 32px;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid var(--teal)}
+.header h1{font-size:1.35rem;font-weight:600;letter-spacing:.5px}
+.header h1 span{color:var(--gold)}
+.tabs{display:flex;gap:4px;background:var(--card);padding:6px 32px;border-bottom:1px solid var(--border);overflow-x:auto}
+.tab{padding:10px 20px;cursor:pointer;border-radius:8px 8px 0 0;color:var(--dim);font-size:.88rem;transition:.15s;white-space:nowrap}
+.tab:hover{color:var(--text);background:rgba(0,150,136,.1)}
+.tab.active{color:var(--teal);border-bottom:2px solid var(--teal);background:rgba(0,150,136,.08)}
+.main{padding:24px 32px;max-width:1400px;margin:0 auto}
+.panel{display:none}.panel.active{display:block}
+.grid{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:22px;transition:.2s}
+.card:hover{border-color:var(--teal)}
+.card h3{font-size:.8rem;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin-bottom:12px}
+.val{font-size:1.6rem;font-weight:700;color:var(--accent)}
+.small{font-size:.82rem;color:var(--dim);margin-top:4px}
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:.75rem;font-weight:600}
+.badge.green{background:rgba(0,166,81,.15);color:var(--green)}
+.badge.red{background:rgba(229,57,53,.15);color:var(--red)}
+.badge.orange{background:rgba(255,152,0,.15);color:var(--orange)}
+.badge.teal{background:rgba(0,150,136,.15);color:var(--teal)}
+.btn{padding:10px 22px;border:none;border-radius:8px;cursor:pointer;font-size:.88rem;font-weight:600;transition:.15s}
+.btn-teal{background:var(--teal);color:#fff}.btn-teal:hover{background:#00796b}
+.btn-outline{background:transparent;border:1px solid var(--teal);color:var(--teal)}.btn-outline:hover{background:rgba(0,150,136,.1)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);font-size:.85rem}
+th{color:var(--dim);font-weight:600;text-transform:uppercase;font-size:.75rem;letter-spacing:.5px}
+.health-ring{width:90px;height:90px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.4rem;font-weight:700;margin:0 auto}
+.list-item{padding:12px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.list-item:last-child{border-bottom:none}
+.rec-card{background:rgba(0,150,136,.05);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px}
+.rec-card .title{font-weight:600;margin-bottom:4px}
+.rec-card .impact{font-size:.82rem;color:var(--teal)}
+.activity-item{padding:10px 0;border-bottom:1px solid var(--border);font-size:.85rem}
+.activity-item .time{color:var(--dim);font-size:.78rem}
+.node-map{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.node{padding:10px 16px;border-radius:8px;border:1px solid var(--border);background:var(--bg);font-size:.82rem}
+.node.error{border-color:var(--red)}
+.eval-pass{color:var(--green)}.eval-fail{color:var(--red)}
+.loading{text-align:center;padding:40px;color:var(--dim)}
+.alert{padding:14px 18px;border-radius:8px;margin-bottom:14px;font-size:.88rem}
+.alert-warn{background:rgba(255,152,0,.1);border:1px solid var(--orange);color:var(--orange)}
+.alert-ok{background:rgba(0,166,81,.1);border:1px solid var(--green);color:var(--green)}
+.header-meta{text-align:right;font-size:.82rem;color:rgba(255,255,255,.6)}
+/* ── Floating Chat FAB ── */
+.chat-fab{position:fixed;bottom:28px;right:28px;width:58px;height:58px;border-radius:50%;background:var(--teal);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1.6rem;color:#fff;z-index:1000;box-shadow:0 4px 16px rgba(0,150,136,.45);transition:.2s}
+.chat-fab:hover{transform:scale(1.08);box-shadow:0 6px 24px rgba(0,150,136,.6)}
+.chat-fab.open{background:var(--red)}
+/* ── Chat Overlay ── */
+.chat-overlay{position:fixed;bottom:100px;right:28px;width:380px;max-height:520px;background:var(--card);border:1px solid var(--border);border-radius:16px;z-index:999;display:none;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.5);overflow:hidden}
+.chat-overlay.open{display:flex}
+.chat-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border);background:linear-gradient(135deg,#003d4d,#006a5e)}
+.chat-header-title{font-weight:600;font-size:.92rem;color:#fff}
+.chat-close{background:none;border:none;color:rgba(255,255,255,.7);cursor:pointer;font-size:1.1rem;padding:4px 8px}
+.chat-close:hover{color:#fff}
+.ai-messages{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px;max-height:320px}
+.ai-msg{display:flex;gap:8px;max-width:90%;animation:fadeIn .25s ease}
+.ai-msg.ai-bot{align-self:flex-start}
+.ai-msg.ai-user{align-self:flex-end;flex-direction:row-reverse}
+.ai-avatar{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.95rem;flex-shrink:0;background:var(--bg);border:1px solid var(--border)}
+.ai-bubble{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:10px 14px;font-size:.85rem;line-height:1.5;white-space:pre-wrap;word-wrap:break-word}
+.ai-msg.ai-user .ai-bubble{background:rgba(0,150,136,.12);border-color:var(--teal)}
+.ai-bubble b,.ai-bubble strong{color:var(--accent)}
+.chat-footer{padding:10px 14px;border-top:1px solid var(--border)}
+.ai-suggestions{display:flex;flex-wrap:wrap;gap:6px;padding-bottom:8px}
+.ai-chip{padding:6px 12px;border-radius:16px;background:var(--bg);border:1px solid var(--border);color:var(--text);cursor:pointer;font-size:.78rem;transition:.15s;white-space:nowrap}
+.ai-chip:hover{border-color:var(--teal);background:rgba(0,150,136,.08)}
+.ai-input-row{display:flex;gap:8px}
+.ai-input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:.85rem;outline:none;transition:.15s}
+.ai-input:focus{border-color:var(--teal)}
+.ai-send{min-width:60px;padding:8px 14px;font-size:.82rem}
+.ai-data-cards{display:flex;flex-wrap:wrap;gap:8px;padding:0 14px 8px}
+.ai-dcard{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;min-width:90px;flex:1}
+.ai-dcard .ai-dval{font-size:1rem;font-weight:700;color:var(--accent)}
+.ai-dcard .ai-dlbl{font-size:.68rem;text-transform:uppercase;color:var(--dim);letter-spacing:.5px;margin-bottom:2px}
+.ai-dcard .ai-dsub{font-size:.72rem;color:var(--dim);margin-top:2px}
+.ai-action-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.ai-action-btn{padding:5px 10px;border-radius:6px;background:rgba(0,150,136,.1);border:1px solid var(--teal);color:var(--teal);cursor:pointer;font-size:.78rem;font-weight:600;transition:.15s}
+.ai-action-btn:hover{background:rgba(0,150,136,.2)}
+.ai-typing{display:flex;gap:4px;padding:8px 14px}
+.ai-typing span{width:6px;height:6px;border-radius:50%;background:var(--dim);animation:blink 1.2s infinite}
+.ai-typing span:nth-child(2){animation-delay:.2s}
+.ai-typing span:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.3}40%{opacity:1}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>BNF <span>LifePilot</span></h1>
+  <div class="header-meta" id="hdr"></div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="dashboard">Dashboard</div>
+  <div class="tab" data-tab="shield">Shield</div>
+  <div class="tab" data-tab="ebucks">eBucks</div>
+  <div class="tab" data-tab="activity">Activity Map</div>
+  <div class="tab" data-tab="evaluation">Evaluation</div>
+</div>
+
+<div class="main">
+  <!-- ═══ DASHBOARD ═══ -->
+  <div class="panel active" id="p-dashboard">
+    <div class="grid" id="dash-grid"><div class="loading">Loading…</div></div>
+  </div>
+
+  <!-- ═══ SHIELD ═══ -->
+  <div class="panel" id="p-shield">
+    <div style="margin-bottom:16px;display:flex;gap:10px">
+      <button class="btn btn-teal" onclick="runShield()">🛡️ Run Shield Scan</button>
+      <button class="btn btn-outline" onclick="runShieldSim()">Simulate Stress</button>
+    </div>
+    <div id="shield-out"><div class="loading">Click "Run Shield Scan" to begin</div></div>
+    <h3 style="margin-top:24px;margin-bottom:12px;color:var(--dim)">SHIELD HISTORY</h3>
+    <div id="shield-events"></div>
+  </div>
+
+  <!-- ═══ EBUCKS ═══ -->
+  <div class="panel" id="p-ebucks">
+    <div style="margin-bottom:16px">
+      <button class="btn btn-teal" onclick="runOptimise()">📊 Optimise eBucks</button>
+    </div>
+    <div class="grid" id="ebucks-grid"><div class="loading">Loading eBucks status…</div></div>
+    <div id="ebucks-recs" style="margin-top:20px"></div>
+  </div>
+
+  <!-- ═══ ACTIVITY MAP ═══ -->
+  <div class="panel" id="p-activity">
+    <div class="card" style="margin-bottom:18px">
+      <h3>Node Map</h3>
+      <div id="node-map" class="node-map"></div>
+    </div>
+    <div class="card">
+      <h3>Activity Log</h3>
+      <div id="activity-log"></div>
+    </div>
+  </div>
+
+  <!-- ═══ EVALUATION ═══ -->
+  <div class="panel" id="p-evaluation">
+    <div style="margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-teal" onclick="runStressTest()">🧪 Stress Test</button>
+      <button class="btn btn-outline" onclick="runChecklist()">📋 Compliance Checklist</button>
+      <button class="btn btn-outline" onclick="runEvalSingle()">Run Single Eval</button>
+    </div>
+    <div id="eval-out"></div>
+  </div>
+</div>
+
+<!-- ═══ FLOATING CHAT ═══ -->
+<button class="chat-fab" id="chat-fab" title="AI Assistant">💬</button>
+<div class="chat-overlay" id="chat-overlay">
+  <div class="chat-header">
+    <span class="chat-header-title">🤖 BNF LifePilot AI</span>
+    <button class="chat-close" id="chat-close">✕</button>
+  </div>
+  <div class="ai-messages" id="ai-messages">
+    <div class="ai-msg ai-bot"><div class="ai-avatar">🤖</div><div class="ai-bubble">Hi! I'm your <b>BNF LifePilot AI</b> assistant. Ask me about your balance, eBucks, Shield protection, spending, or anything else.</div></div>
+  </div>
+  <div id="ai-cards" class="ai-data-cards"></div>
+  <div class="chat-footer">
+    <div id="ai-suggestions" class="ai-suggestions"></div>
+    <div class="ai-input-row">
+      <input type="text" id="ai-input" class="ai-input" placeholder="Type a message…" autocomplete="off">
+      <button class="btn btn-teal ai-send" id="ai-send">Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let UID = null;
+
+// ── Tabs ──────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  document.getElementById('p-' + t.dataset.tab).classList.add('active');
+  if (t.dataset.tab === 'activity') loadActivity();
+}));
+
+// ── Floating Chat Toggle ──────────────────────────────────────
+const chatFab = document.getElementById('chat-fab');
+const chatOverlay = document.getElementById('chat-overlay');
+document.getElementById('chat-close').addEventListener('click', () => toggleChat(false));
+chatFab.addEventListener('click', () => toggleChat(!chatOverlay.classList.contains('open')));
+function toggleChat(show) {
+  chatOverlay.classList.toggle('open', show);
+  chatFab.classList.toggle('open', show);
+  chatFab.textContent = show ? '✕' : '💬';
+  if (show) { loadSuggestions(); document.getElementById('ai-input').focus(); }
+}
+
+// ── Init ──────────────────────────────────────────────────────
+async function init() {
+  try {
+    const disc = await (await fetch(API + '/api/dashboard/discover')).json();
+    UID = disc.userId;
+    const d = await (await fetch(API + '/api/dashboard/' + UID)).json();
+    renderDashboard(d);
+    loadEbucks();
+    loadShieldEvents();
+  } catch (e) { document.getElementById('dash-grid').innerHTML = '<div class="alert alert-warn">Failed to load: ' + esc(e.message) + '</div>'; }
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ── Dashboard ─────────────────────────────────────────────────
+function renderDashboard(d) {
+  const hs = d.healthScore;
+  document.getElementById('hdr').innerHTML = esc(d.user.firstName + ' ' + d.user.lastName);
+  let h = '';
+  h += `<div class="card"><h3>Financial Health</h3><div class="health-ring" style="border:4px solid ${hs.color};color:${hs.color}">${hs.score}</div><div class="small" style="text-align:center;margin-top:8px">${esc(hs.label)}</div></div>`;
+  d.accounts.forEach(a => {
+    h += `<div class="card"><h3>${esc(a.account_type)} Account</h3><div class="val">R ${esc(a.balance)}</div><div class="small">${esc(a.account_number)}</div></div>`;
+  });
+  if (d.ebucks) {
+    h += `<div class="card"><h3>eBucks</h3><div class="val" style="color:var(--gold)">${esc(d.ebucks.pointsDisplay)}</div><div class="small">Level ${d.ebucks.current_level} — ${esc(d.ebucks.levelName)}</div></div>`;
+  }
+  h += '<div class="card" style="grid-column:1/-1"><h3>Upcoming Debit Orders</h3>';
+  if (d.upcomingDebits.length) {
+    h += '<table><tr><th>Creditor</th><th>Amount</th><th>Due</th></tr>';
+    d.upcomingDebits.forEach(x => { h += `<tr><td>${esc(x.creditor_name)}</td><td>R ${esc(x.amount)}</td><td>${esc(x.due_date)}</td></tr>`; });
+    h += '</table>';
+  } else h += '<div class="small">None in the next 7 days</div>';
+  h += '</div>';
+  h += '<div class="card" style="grid-column:1/-1"><h3>Recent Transactions</h3>';
+  if (d.recentTransactions.length) {
+    h += '<table><tr><th>Description</th><th>Amount</th><th>Type</th><th>Date</th></tr>';
+    d.recentTransactions.slice(0,10).forEach(t => {
+      h += `<tr><td>${esc(t.description||'-')}</td><td>R ${esc(t.amount)}</td><td>${esc(t.type)}</td><td>${esc(t.timestamp?.slice(0,10)||'')}</td></tr>`;
+    });
+    h += '</table>';
+  } else h += '<div class="small">No transactions</div>';
+  h += '</div>';
+  document.getElementById('dash-grid').innerHTML = h;
+}
+
+// ── Shield ────────────────────────────────────────────────────
+async function runShield() {
+  document.getElementById('shield-out').innerHTML = '<div class="loading">Scanning…</div>';
+  const r = await (await fetch(API+'/api/shield/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:UID})})).json();
+  renderShield(r);
+  loadShieldEvents();
+}
+
+async function runShieldSim() {
+  document.getElementById('shield-out').innerHTML = '<div class="loading">Simulating stress…</div>';
+  const r = await (await fetch(API+'/api/shield/simulate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:UID,chequeBalance:5000,savingsBalance:50000})})).json();
+  renderShield(r, true);
+}
+
+function renderShield(r, sim) {
+  let h = sim ? '<div class="alert alert-warn">⚠️ SIMULATION — balances reverted after scan</div>' : '';
+  if (r.shielded?.length) {
+    r.shielded.forEach(s => { h += `<div class="alert alert-ok">🛡️ Shielded <b>${esc(s.debitOrder)}</b>: R ${esc(s.amount)} (shortfall R ${esc(s.shortfall)})</div>`; });
+  }
+  if (r.atRisk?.length) {
+    r.atRisk.forEach(s => { h += `<div class="alert alert-warn">⚠️ At Risk: <b>${esc(s.debitOrder)}</b> R ${esc(s.amount)} (shortfall R ${esc(s.shortfall)})</div>`; });
+  }
+  if (r.summary) {
+    h += `<div class="grid" style="margin-top:14px"><div class="card"><h3>Cheque After</h3><div class="val">R ${esc(r.summary.chequeAfter)}</div></div>`;
+    h += `<div class="card"><h3>Savings After</h3><div class="val">R ${esc(r.summary.savingsAfter)}</div></div>`;
+    h += `<div class="card"><h3>Shielded / At Risk</h3><div class="val">${r.summary.totalShielded} / ${r.summary.totalAtRisk}</div></div></div>`;
+  }
+  if (!r.shielded?.length && !r.atRisk?.length) h += '<div class="alert alert-ok">✅ All debit orders covered — no shield action needed</div>';
+  document.getElementById('shield-out').innerHTML = h;
+}
+
+async function loadShieldEvents() {
+  if (!UID) return;
+  const r = await (await fetch(API+'/api/shield/events/'+UID)).json();
+  if (!r.events?.length) { document.getElementById('shield-events').innerHTML='<div class="small">No events yet</div>'; return; }
+  let h = '<table><tr><th>Creditor</th><th>Amount Transferred</th><th>Status</th><th>Date</th></tr>';
+  r.events.forEach(e => {
+    const badge = e.status === 'completed' ? 'green' : 'orange';
+    h += `<tr><td>${esc(e.creditor_name||'-')}</td><td>R ${(e.amount_cents/100).toFixed(2)}</td><td><span class="badge ${badge}">${esc(e.status)}</span></td><td>${esc(e.triggered_at?.slice(0,19)||'')}</td></tr>`;
+  });
+  h += '</table>';
+  document.getElementById('shield-events').innerHTML = h;
+}
+
+// ── eBucks ────────────────────────────────────────────────────
+async function loadEbucks() {
+  if (!UID) return;
+  const r = await (await fetch(API+'/api/ebucks/'+UID)).json();
+  let h = `<div class="card"><h3>Current Level</h3><div class="val" style="color:var(--gold)">${esc(r.currentLevelName)}</div><div class="small">Level ${r.current_level}</div></div>`;
+  h += `<div class="card"><h3>Points</h3><div class="val">${(r.points_balance||0).toLocaleString()}</div></div>`;
+  h += `<div class="card"><h3>Next Level</h3><div class="val">${esc(r.nextLevelName)}</div><div class="small">${JSON.stringify(r.requirements||{})}</div></div>`;
+  document.getElementById('ebucks-grid').innerHTML = h;
+}
+
+async function runOptimise() {
+  const r = await (await fetch(API+'/api/ebucks/optimize/'+UID,{method:'POST'})).json();
+  let h = `<div class="card" style="margin-bottom:14px"><h3>Optimisation Result</h3>`;
+  h += `<div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:12px">`;
+  h += `<div><div class="small">Current</div><div class="val" style="font-size:1.2rem">${esc(r.currentLevelName)}</div></div>`;
+  h += `<div><div class="small">Projected</div><div class="val" style="font-size:1.2rem;color:var(--green)">${esc(r.projectedLevelName)}</div></div>`;
+  h += `<div><div class="small">Monthly Spend</div><div class="val" style="font-size:1.2rem">R ${esc(r.monthlySpend)}</div></div>`;
+  h += `<div><div class="small">Est. Points Gain</div><div class="val" style="font-size:1.2rem;color:var(--gold)">+${r.estimatedPointsGain}</div></div>`;
+  h += `</div></div>`;
+  if (r.recommendations?.length) {
+    h += '<h3 style="color:var(--dim);margin-bottom:12px">RECOMMENDATIONS</h3>';
+    r.recommendations.forEach(rec => {
+      const pColor = rec.priority==='high'?'var(--red)':rec.priority==='medium'?'var(--orange)':'var(--dim)';
+      h += `<div class="rec-card"><span class="badge" style="background:${pColor}22;color:${pColor};margin-bottom:8px">${esc(rec.priority)}</span> <span class="title">${esc(rec.title)}</span><div class="small">${esc(rec.description)}</div><div class="impact">Impact: ${esc(rec.impact)}</div></div>`;
+    });
+  }
+  document.getElementById('ebucks-recs').innerHTML = h;
+}
+
+// ── Activity Map ──────────────────────────────────────────────
+async function loadActivity() {
+  if (!UID) return;
+  const r = await (await fetch(API+'/api/agent/activity-map/'+UID)).json();
+  let nm = '';
+  (r.nodeMap||[]).forEach(n => {
+    nm += `<div class="node ${n.errors?'error':''}">${esc(n.name)} <span class="small">(${n.runs} runs${n.errors?', '+n.errors+' errors':''})</span></div>`;
+  });
+  document.getElementById('node-map').innerHTML = nm || '<div class="small">No activity yet</div>';
+
+  let al = '';
+  (r.activities||[]).forEach(a => {
+    const color = a.status==='error'?'var(--red)':a.status==='success'?'var(--green)':'var(--dim)';
+    al += `<div class="activity-item"><span style="color:${color}">●</span> <b>${esc(a.action)}</b> → ${esc(a.node_name||'')} <span class="badge ${a.status==='error'?'red':'green'}">${esc(a.status)}</span><div class="time">${esc(a.timestamp||'')} — ${esc(a.details||'')}</div></div>`;
+  });
+  document.getElementById('activity-log').innerHTML = al || '<div class="small">No activity yet</div>';
+}
+
+// ── Evaluation ────────────────────────────────────────────────
+async function runStressTest() {
+  document.getElementById('eval-out').innerHTML = '<div class="loading">Running stress test…</div>';
+  const r = await (await fetch(API+'/api/evaluation/stress-test',{method:'POST'})).json();
+  let h = `<div class="card"><h3>Stress Test</h3><div class="val ${r.allPassed?'eval-pass':'eval-fail'}">${r.allPassed?'ALL PASSED ✅':'SOME FAILURES ❌'}</div><div class="small">${r.passed}/${r.total} passed</div>`;
+  h += '<div style="margin-top:14px">';
+  (r.results||[]).forEach(t => {
+    h += `<div class="list-item"><span>${esc(t.test)}</span><span class="${t.passed?'eval-pass':'eval-fail'}">${t.passed?'✅ Pass':'❌ Fail'}</span></div>`;
+  });
+  h += '</div></div>';
+  document.getElementById('eval-out').innerHTML = h;
+}
+
+async function runChecklist() {
+  document.getElementById('eval-out').innerHTML = '<div class="loading">Checking compliance…</div>';
+  const r = await (await fetch(API+'/api/evaluation/checklist')).json();
+  let h = `<div class="card"><h3>Compliance Checklist</h3><div class="val ${r.allPassed?'eval-pass':'eval-fail'}">${r.allPassed?'ALL PASSED ✅':'ISSUES FOUND ❌'}</div>`;
+  h += '<div style="margin-top:14px">';
+  Object.values(r.checklist||{}).forEach(c => {
+    h += `<div class="list-item"><span>${esc(c.label)}</span><span class="${c.passed?'eval-pass':'eval-fail'}">${c.passed?'✅':'❌'}</span></div>`;
+  });
+  h += '</div></div>';
+  document.getElementById('eval-out').innerHTML = h;
+}
+
+async function runEvalSingle() {
+  document.getElementById('eval-out').innerHTML = '<div class="loading">Running evaluation…</div>';
+  const r = await (await fetch(API+'/api/evaluation/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({testName:'interactive_ebucks',input:'What is my eBucks level?',expected:'Gold Level 3 points'})})).json();
+  let h = `<div class="card"><h3>Single Evaluation</h3>`;
+  h += `<div class="val ${r.passed?'eval-pass':'eval-fail'}">${r.passed?'PASS ✅':'FAIL ❌'}</div>`;
+  h += `<div class="small">Groundedness: ${(r.groundedness*100).toFixed(0)}% | Completeness: ${(r.completeness*100).toFixed(0)}%</div>`;
+  h += `<div style="margin-top:10px;padding:12px;background:var(--bg);border-radius:8px;font-size:.85rem">${esc(r.actual)}</div></div>`;
+  document.getElementById('eval-out').innerHTML = h;
+}
+
+// ── AI Chat ───────────────────────────────────────────────────
+const aiMsgs = document.getElementById('ai-messages');
+const aiInput = document.getElementById('ai-input');
+const aiSend = document.getElementById('ai-send');
+let aiHistory = [];
+let aiConvId = null;
+
+aiSend.addEventListener('click', () => sendAiMessage());
+aiInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiMessage(); } });
+
+async function sendAiMessage(text) {
+  const msg = text || aiInput.value.trim();
+  if (!msg || !UID) return;
+  aiInput.value = '';
+  appendAiMsg(msg, 'user');
+  aiHistory.push({role:'user',content:msg});
+  document.getElementById('ai-suggestions').innerHTML = '';
+  document.getElementById('ai-cards').innerHTML = '';
+
+  const typing = document.createElement('div');
+  typing.className = 'ai-msg ai-bot';
+  typing.innerHTML = '<div class="ai-avatar">🤖</div><div class="ai-typing"><span></span><span></span><span></span></div>';
+  aiMsgs.appendChild(typing);
+  aiMsgs.scrollTop = aiMsgs.scrollHeight;
+
+  try {
+    const r = await (await fetch(API+'/api/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:UID,message:msg,history:aiHistory.slice(-10),conversationId:aiConvId})})).json();
+    typing.remove();
+    aiConvId = r.conversationId;
+    appendAiMsg(r.reply, 'bot', r.actions);
+    aiHistory.push({role:'assistant',content:r.reply});
+    if (r.dataCards?.length) renderAiCards(r.dataCards);
+  } catch(e) {
+    typing.remove();
+    appendAiMsg('Sorry, something went wrong. Please try again.', 'bot');
+  }
+}
+
+function appendAiMsg(text, role, actions) {
+  const wrap = document.createElement('div');
+  wrap.className = 'ai-msg ai-' + role;
+  let html = role==='bot'?'<div class="ai-avatar">🤖</div>':'<div class="ai-avatar">👤</div>';
+  html += '<div class="ai-bubble">' + formatMd(text);
+  if (actions?.length) {
+    html += '<div class="ai-action-row">';
+    actions.forEach(a => { html += '<button class="ai-action-btn" onclick="handleAiAction(\'' + esc(a.action) + '\',\'' + esc(a.label) + '\')">'+esc(a.label)+'</button>'; });
+    html += '</div>';
+  }
+  html += '</div>';
+  wrap.innerHTML = html;
+  aiMsgs.appendChild(wrap);
+  aiMsgs.scrollTop = aiMsgs.scrollHeight;
+}
+
+function formatMd(t) {
+  return esc(t).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\n/g,'<br>');
+}
+
+function renderAiCards(cards) {
+  const el = document.getElementById('ai-cards');
+  el.innerHTML = cards.map(c => `<div class="ai-dcard"><div class="ai-dlbl">${esc(c.label)}</div><div class="ai-dval">${esc(c.value)}</div>${c.sublabel?'<div class="ai-dsub">'+esc(c.sublabel)+'</div>':''}</div>`).join('');
+}
+
+async function loadSuggestions() {
+  if (!UID) return;
+  try {
+    const r = await (await fetch(API+'/api/ai/suggestions/'+UID)).json();
+    const el = document.getElementById('ai-suggestions');
+    el.innerHTML = (r.suggestions||[]).map(s => `<div class="ai-chip" onclick="sendAiMessage('${esc(s.text)}')">${s.icon||'💬'} ${esc(s.text)}</div>`).join('');
+  } catch(e) {}
+}
+
+function handleAiAction(action, label) {
+  if (action==='shield_scan') { sendAiMessage('Run Shield protection scan'); }
+  else if (action==='ebucks_optimize') { sendAiMessage('Optimise my eBucks — give me detailed recommendations'); }
+  else if (action==='ebucks_levelup') { sendAiMessage('How can I level up my eBucks?'); }
+  else if (action==='ask_balance') { sendAiMessage('What is my account balance?'); }
+  else if (action==='ask_ebucks') { sendAiMessage('Show my eBucks status'); }
+  else if (action==='transfer_form') {
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+    document.querySelector('[data-tab="dashboard"]').classList.add('active');
+    document.getElementById('p-dashboard').classList.add('active');
+  }
+  else { sendAiMessage(label); }
+}
+
+init();
+</script>
+</body>
+</html>

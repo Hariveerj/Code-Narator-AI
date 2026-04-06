@@ -8,8 +8,8 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Install curl, zstd, ca-certificates (needed by Ollama installer and healthcheck)
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates zstd && \
+# Install curl (needed by Ollama installer and healthcheck)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Ollama
@@ -27,7 +27,7 @@ COPY frontend/ ./frontend/
 COPY scripts/ ./scripts/
 COPY app.py .
 COPY entrypoint.sh .
-RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
+RUN chmod +x entrypoint.sh
 
 # Ollama talks on 11434 internally; app on 8081
 ENV OLLAMA_BASE_URL=http://localhost:11434 \

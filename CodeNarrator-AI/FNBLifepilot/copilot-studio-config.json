@@ -1,0 +1,58 @@
+﻿{
+  "schemaVersion": "1.0",
+  "name": "BNF LifePilot",
+  "description": "Autonomous financial health management agent for BNF banking",
+  "language": "en-ZA",
+  "topics": [
+    {
+      "name": "AccountBalance",
+      "triggerPhrases": [
+        "What is my balance?",
+        "How much money do I have?",
+        "Show my accounts"
+      ],
+      "action": { "type": "HTTP", "method": "GET", "url": "/api/accounts/{userId}" }
+    },
+    {
+      "name": "ShieldProtection",
+      "triggerPhrases": [
+        "Protect my account",
+        "Check my debit orders",
+        "Will my debits go through?"
+      ],
+      "action": { "type": "HTTP", "method": "POST", "url": "/api/shield/scan", "body": { "userId": "{userId}" } }
+    },
+    {
+      "name": "eBucksOptimise",
+      "triggerPhrases": [
+        "How can I earn more eBucks?",
+        "What is my eBucks level?",
+        "Optimise my eBucks"
+      ],
+      "action": { "type": "HTTP", "method": "POST", "url": "/api/ebucks/optimize/{userId}" }
+    },
+    {
+      "name": "TransferFunds",
+      "triggerPhrases": [
+        "Transfer money",
+        "Move funds",
+        "Pay from my account"
+      ],
+      "action": { "type": "HTTP", "method": "POST", "url": "/api/accounts/transfer", "requiresBiometric": true }
+    },
+    {
+      "name": "AgentAction",
+      "triggerPhrases": [
+        "Run agent action",
+        "Execute task"
+      ],
+      "action": { "type": "HTTP", "method": "POST", "url": "/api/agent/execute" }
+    }
+  ],
+  "settings": {
+    "groundednessTarget": 0.95,
+    "maxRetries": 3,
+    "biometricThresholdCents": 500000,
+    "shieldLookAheadDays": 3
+  }
+}

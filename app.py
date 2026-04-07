@@ -18,6 +18,14 @@ if _ENV_FILE.exists():
             os.environ.setdefault(key, value)
 
 
+import logging
+
+# Configure root logger so backend.* loggers are visible
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+
 if __name__ == "__main__":
     uvicorn.run(
         "backend.main:app",

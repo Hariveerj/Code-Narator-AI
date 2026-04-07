@@ -137,13 +137,21 @@
       </div>
 
       <div class="result-tabs" role="tablist">
-        <button class="rtab active" data-pane="explanation" role="tab">
+        <button class="rtab active" data-pane="overview" role="tab">
           <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
-          Explanation
+          Overview
         </button>
-        <button class="rtab" data-pane="steps" role="tab">
+        <button class="rtab" data-pane="flow" role="tab">
           <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h6a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"/></svg>
-          Steps
+          Flow
+        </button>
+        <button class="rtab" data-pane="classes" role="tab">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"/></svg>
+          Classes
+        </button>
+        <button class="rtab" data-pane="logic" role="tab">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
+          Logic
         </button>
         <button class="rtab" data-pane="diagram" role="tab">
           <svg viewBox="0 0 20 20" fill="currentColor"><path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"/></svg>
@@ -164,22 +172,42 @@
         <div class="skeleton-line w-2of5"></div>
       </div>
 
-      <!-- Pane: Explanation -->
-      <div class="result-pane" id="pane-explanation">
-        <div class="empty-state" id="emptyExplanation">
+      <!-- Pane: Overview -->
+      <div class="result-pane" id="pane-overview">
+        <div class="empty-state" id="emptyOverview">
           <div class="empty-icon">&#128269;</div>
-          <p>Submit code to see an explanation</p>
+          <p>Submit code to see an overview</p>
         </div>
-        <p class="explanation-text hidden" id="explanation"></p>
+        <p class="explanation-text hidden" id="overview"></p>
       </div>
 
-      <!-- Pane: Steps -->
-      <div class="result-pane hidden" id="pane-steps">
-        <div class="empty-state" id="emptySteps">
+      <!-- Pane: Flow -->
+      <div class="result-pane hidden" id="pane-flow">
+        <div class="empty-state" id="emptyFlow">
           <div class="empty-icon">&#128203;</div>
-          <p>Submit code to see step-by-step breakdown</p>
+          <p>Submit code to see execution flow</p>
         </div>
-        <ol class="steps-timeline hidden" id="steps"></ol>
+        <ol class="steps-timeline hidden" id="flowSteps"></ol>
+      </div>
+
+      <!-- Pane: Classes -->
+      <div class="result-pane hidden" id="pane-classes">
+        <div class="empty-state" id="emptyClasses">
+          <div class="empty-icon">&#128230;</div>
+          <p>Submit code to see class/module breakdown</p>
+        </div>
+        <div class="classes-wrap hidden" id="classesWrap">
+          <div class="classes-list" id="classesList"></div>
+        </div>
+      </div>
+
+      <!-- Pane: Logic -->
+      <div class="result-pane hidden" id="pane-logic">
+        <div class="empty-state" id="emptyLogic">
+          <div class="empty-icon">&#129504;</div>
+          <p>Submit code to see detailed logic analysis</p>
+        </div>
+        <p class="explanation-text hidden" id="detailedLogic"></p>
       </div>
 
       <!-- Pane: Diagram -->

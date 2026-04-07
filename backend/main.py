@@ -5,13 +5,16 @@ import json
 import logging
 import os
 import tempfile
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated, Any, List, cast
 
+import aiofiles
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -35,15 +38,31 @@ logger = logging.getLogger(__name__)
 
 JOB_STREAM_POLL_SECONDS = int(os.getenv("JOB_STREAM_POLL_SECONDS", "15"))
 JOB_STREAM_IDLE_TIMEOUT_SECONDS = int(os.getenv("JOB_STREAM_IDLE_TIMEOUT_SECONDS", "1800"))
-MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(50 * 1024 * 1024)))
-MAX_FILE_BYTES = int(os.getenv("MAX_FILE_BYTES", str(20 * 1024 * 1024)))
-MAX_FILES_PER_JOB = int(os.getenv("MAX_FILES_PER_JOB", "1200"))
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(100 * 1024 * 1024)))  # 100 MB
+MAX_FILE_BYTES = int(os.getenv("MAX_FILE_BYTES", str(50 * 1024 * 1024)))       # 50 MB per file
+MAX_FILES_PER_JOB = int(os.getenv("MAX_FILES_PER_JOB", "1500"))
 UPLOAD_CHUNK_BYTES = int(os.getenv("UPLOAD_CHUNK_BYTES", str(1024 * 1024)))
-FILE_SNIPPET_CHARS = int(os.getenv("FILE_SNIPPET_CHARS", "40000"))
+FILE_SNIPPET_CHARS = int(os.getenv("FILE_SNIPPET_CHARS", "30000"))  # reduced per-file to avoid OOM
 UPLOAD_TMP_DIR = Path(os.getenv("UPLOAD_TMP_DIR", str(Path(tempfile.gettempdir()) / "codenarrator_uploads")))
 UPLOAD_TMP_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Code Narrator AI", version="2.0.0")
+# Rate limiting state
+_rate_limit_window = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+_rate_limit_max = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "20"))
+_rate_limits: dict[str, list[float]] = {}
+
+# Allowed file extensions
+_ALLOWED_EXTENSIONS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".cs", ".cpp", ".c", ".h",
+    ".hpp", ".go", ".rb", ".php", ".swift", ".kt", ".rs", ".txt", ".html",
+    ".css", ".scss", ".json", ".yaml", ".yml", ".md", ".sh", ".bash", ".vue",
+    ".xml", ".sql", ".r", ".scala", ".dart", ".lua", ".pl", ".pm",
+}
+
+app = FastAPI(title="Code Narrator AI", version="3.0.0")
+
+# Gzip compression for responses
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 app.add_middleware(
     CORSMiddleware,
@@ -62,6 +81,36 @@ _background_tasks: set[asyncio.Task[None]] = set()
 
 
 @app.middleware("http")
+async def security_headers(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
+
+@app.middleware("http")
+async def rate_limiter(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    if request.url.path.startswith("/api/upload") or request.url.path.startswith("/api/analyze") or request.url.path == "/analyze":
+        client_ip = request.client.host if request.client else "unknown"
+        # Skip rate limiting for localhost/test clients
+        if client_ip not in ("127.0.0.1", "::1", "localhost", "testclient", "unknown"):
+            now = time.time()
+            window_start = now - _rate_limit_window
+            timestamps = _rate_limits.get(client_ip, [])
+            timestamps = [t for t in timestamps if t > window_start]
+            if len(timestamps) >= _rate_limit_max:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": f"Rate limit exceeded. Max {_rate_limit_max} requests per {_rate_limit_window}s."},
+                )
+            timestamps.append(now)
+            _rate_limits[client_ip] = timestamps
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def request_size_guard(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > MAX_UPLOAD_BYTES:
@@ -76,6 +125,11 @@ def _safe_name(name: str) -> str:
     return "".join(ch if (ch.isalnum() or ch in "._-") else "_" for ch in name)[:120] or "file"
 
 
+def _is_allowed_file(filename: str) -> bool:
+    ext = os.path.splitext(filename)[1].lower()
+    return ext in _ALLOWED_EXTENSIONS
+
+
 def _cleanup_staged_files(file_refs: list[tuple[str, Path]]) -> None:
     for _, path in file_refs:
         try:
@@ -84,40 +138,67 @@ def _cleanup_staged_files(file_refs: list[tuple[str, Path]]) -> None:
             continue
 
 
+async def _write_upload_chunks(
+    upload: UploadFile,
+    tmp_path: Path,
+    filename: str,
+    total_uploaded_ref: list[int],
+) -> int:
+    """Stream upload chunks to disk, enforcing size limits. Returns bytes written."""
+    written = 0
+    async with aiofiles.open(tmp_path, "wb") as out:
+        while True:
+            chunk = await upload.read(UPLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            written += len(chunk)
+            total_uploaded_ref[0] += len(chunk)
+            if written > MAX_FILE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File '{filename}' exceeds max file size ({MAX_FILE_BYTES} bytes).",
+                )
+            if total_uploaded_ref[0] > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Total upload exceeds max payload ({MAX_UPLOAD_BYTES} bytes).",
+                )
+            await out.write(chunk)
+    return written
+
+
+def _is_empty_file(tmp_path: Path, written: int) -> bool:
+    """Check if a staged file is empty or whitespace-only."""
+    if written == 0:
+        return True
+    if written < 1024:
+        text = tmp_path.read_text(encoding="utf-8", errors="replace").strip()
+        return not text
+    return False
+
+
 async def _stage_upload_files(job_id: str, files: List[UploadFile]) -> list[tuple[str, Path]]:
     if len(files) > MAX_FILES_PER_JOB:
         raise HTTPException(status_code=413, detail=f"Too many files. Max supported is {MAX_FILES_PER_JOB}.")
 
     staged: list[tuple[str, Path]] = []
-    total_uploaded = 0
+    total_uploaded_ref = [0]
 
     try:
         for idx, upload in enumerate(files):
             filename = upload.filename or f"unknown_{idx}"
+            if not _is_allowed_file(filename):
+                await upload.close()
+                continue
             safe_filename = _safe_name(filename)
             tmp_path = UPLOAD_TMP_DIR / f"{job_id}_{idx}_{safe_filename}"
 
-            written = 0
-            with tmp_path.open("wb") as out:
-                while True:
-                    chunk = await upload.read(UPLOAD_CHUNK_BYTES)
-                    if not chunk:
-                        break
-                    written += len(chunk)
-                    total_uploaded += len(chunk)
-                    if written > MAX_FILE_BYTES:
-                        raise HTTPException(
-                            status_code=413,
-                            detail=f"File '{filename}' exceeds max file size ({MAX_FILE_BYTES} bytes).",
-                        )
-                    if total_uploaded > MAX_UPLOAD_BYTES:
-                        raise HTTPException(
-                            status_code=413,
-                            detail=f"Total upload exceeds max payload ({MAX_UPLOAD_BYTES} bytes).",
-                        )
-                    out.write(chunk)
-
+            written = await _write_upload_chunks(upload, tmp_path, filename, total_uploaded_ref)
             await upload.close()
+
+            if _is_empty_file(tmp_path, written):
+                tmp_path.unlink(missing_ok=True)
+                continue
             staged.append((filename, tmp_path))
 
         return staged
@@ -225,40 +306,68 @@ def _build_file_batches(decoded_files: list[tuple[str, str]], batch_size: int) -
     return [decoded_files[i : i + batch_size] for i in range(0, len(decoded_files), batch_size)]
 
 
+def _extract_security_findings(security_issues: object) -> list[dict[str, str]]:
+    """Extract normalized security findings from a result."""
+    findings: list[dict[str, str]] = []
+    if not isinstance(security_issues, list):
+        return findings
+    for finding in cast(list[object], security_issues):
+        if isinstance(finding, dict):
+            finding_map = cast(dict[str, object], finding)
+            findings.append({
+                "severity": str(finding_map.get("severity", "INFO")),
+                "issue": str(finding_map.get("issue", "")),
+                "detail": str(finding_map.get("detail", "")),
+            })
+    return findings
+
+
+def _extract_class_entries(classes: object) -> list[dict[str, Any]]:
+    """Extract class entries from a result."""
+    entries: list[dict[str, Any]] = []
+    if not isinstance(classes, list):
+        return entries
+    for cls in cast(list[object], classes):
+        if isinstance(cls, dict):
+            entries.append(cast(dict[str, Any], cls))
+    return entries
+
+
 def _merge_batch_result(
     result: dict[str, object],
     batch_idx: int,
     filenames: list[str],
-    all_explanations: list[str],
-    all_steps: list[str],
-    all_security: list[dict[str, str]],
-    all_mermaid_nodes: list[str],
+    all_overviews: list[str],
+    all_flow_steps: list[str],
+    all_security_issues: list[dict[str, str]],
+    all_class_diagrams: list[str],
+    all_classes: list[dict[str, Any]],
+    all_detailed_logic: list[str],
 ) -> None:
-    explanation = str(result.get("explanation", "")).strip()
-    if explanation:
-        all_explanations.append(f"**Batch {batch_idx}** ({', '.join(filenames)}): {explanation}")
+    batch_label = f"**Batch {batch_idx}** ({', '.join(filenames)})"
 
-    steps = result.get("steps", [])
-    if isinstance(steps, list):
-        for step in cast(list[object], steps):
+    overview = str(result.get("overview", "")).strip()
+    if overview:
+        all_overviews.append(f"{batch_label}: {overview}")
+
+    flow_steps = result.get("flow_steps", [])
+    if isinstance(flow_steps, list):
+        for step in cast(list[object], flow_steps):
             step_text = str(step).strip()
             if step_text:
-                all_steps.append(step_text)
+                all_flow_steps.append(step_text)
 
-    security = result.get("security", [])
-    if isinstance(security, list):
-        for finding in cast(list[object], security):
-            if isinstance(finding, dict):
-                finding_map = cast(dict[str, object], finding)
-                all_security.append({
-                    "severity": str(finding_map.get("severity", "INFO")),
-                    "issue": str(finding_map.get("issue", "")),
-                    "detail": str(finding_map.get("detail", "")),
-                })
+    all_security_issues.extend(_extract_security_findings(result.get("security_issues", [])))
 
-    mermaid = str(result.get("mermaid", "")).strip()
-    if mermaid:
-        all_mermaid_nodes.append(mermaid)
+    class_diagram = str(result.get("class_diagram", "")).strip()
+    if class_diagram:
+        all_class_diagrams.append(class_diagram)
+
+    all_classes.extend(_extract_class_entries(result.get("classes", [])))
+
+    detailed_logic = str(result.get("detailed_logic", "")).strip()
+    if detailed_logic:
+        all_detailed_logic.append(f"{batch_label}: {detailed_logic}")
 
 
 async def _process_job(
@@ -291,10 +400,12 @@ async def _process_job(
         batches = _build_file_batches(decoded_files, BATCH_SIZE)
 
         total_batches = len(batches)
-        all_explanations: list[str] = []
-        all_steps: list[str] = []
-        all_security: list[dict[str, str]] = []
-        all_mermaid_nodes: list[str] = []
+        all_overviews: list[str] = []
+        all_flow_steps: list[str] = []
+        all_security_issues: list[dict[str, str]] = []
+        all_class_diagrams: list[str] = []
+        all_classes: list[dict[str, Any]] = []
+        all_detailed_logic: list[str] = []
 
         for batch_idx, batch in enumerate(batches, start=1):
             filenames = [f for f, _ in batch]
@@ -327,24 +438,29 @@ async def _process_job(
                 result,
                 batch_idx,
                 filenames,
-                all_explanations,
-                all_steps,
-                all_security,
-                all_mermaid_nodes,
+                all_overviews,
+                all_flow_steps,
+                all_security_issues,
+                all_class_diagrams,
+                all_classes,
+                all_detailed_logic,
             )
 
             await asyncio.sleep(0)
 
         # Merge all batch results into one final result
-        merged_explanation = "\n\n".join(all_explanations) if all_explanations else "No explanation returned."
-        merged_mermaid = all_mermaid_nodes[0] if all_mermaid_nodes else "flowchart TD\n  A[Start] --> B[No output]"
+        merged_overview = "\n\n".join(all_overviews) if all_overviews else "No overview returned."
+        merged_diagram = all_class_diagrams[0] if all_class_diagrams else "flowchart TD\n  A[Start] --> B[No output]"
+        merged_logic = "\n\n".join(all_detailed_logic) if all_detailed_logic else "No detailed logic returned."
 
         await queue.put({
             "type": "result",
-            "explanation": merged_explanation,
-            "steps": all_steps,
-            "mermaid": merged_mermaid,
-            "security": all_security,
+            "overview": merged_overview,
+            "flow_steps": all_flow_steps,
+            "class_diagram": merged_diagram,
+            "classes": all_classes,
+            "detailed_logic": merged_logic,
+            "security_issues": all_security_issues,
         })
 
     except OllamaClientError as exc:

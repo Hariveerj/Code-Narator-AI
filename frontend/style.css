@@ -185,6 +185,18 @@ h1{font-size:1.45rem;font-weight:800;letter-spacing:-.035em;line-height:1.1;colo
 .sec-finding p{margin:0;font-size:.82rem;color:var(--text-muted);line-height:1.5}
 .sec-sev{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.68rem;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.4px}
 
+/* == Classes Panel == */
+.classes-wrap{padding:4px 0;animation:fadeUp .35s ease}
+.classes-list{display:flex;flex-direction:column;gap:12px}
+.class-card{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px 16px;animation:fadeUp .3s ease;transition:border-color .2s}
+.class-card:hover{border-color:var(--accent)}
+.class-header{font-weight:700;font-size:.95rem;color:var(--accent);font-family:var(--font-mono);margin-bottom:6px}
+.class-purpose{font-size:.85rem;color:var(--text-muted);margin-bottom:8px;line-height:1.5}
+.class-methods ul{list-style:none;padding:0;margin:4px 0 8px;display:flex;flex-wrap:wrap;gap:4px}
+.class-methods li{font-family:var(--font-mono);font-size:.75rem;color:var(--accent-2);background:var(--accent-dim);padding:2px 8px;border-radius:4px;border:1px solid rgba(17,112,245,.2)}
+.class-methods strong,.class-deps strong{font-size:.78rem;color:var(--text-muted);display:block;margin-bottom:4px}
+.dep-badge{display:inline-block;font-family:var(--font-mono);font-size:.72rem;color:var(--text-muted);background:var(--bg-surface-2);padding:2px 7px;border-radius:4px;border:1px solid var(--border)}
+
 /* == Scrollbar == */
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-track{background:transparent}

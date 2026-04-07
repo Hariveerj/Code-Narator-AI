@@ -18,23 +18,27 @@ services:
       PORT: "8081"
       OLLAMA_BASE_URL: "http://localhost:11434"
       OLLAMA_MODEL: "llama3.2:3b"
-      OLLAMA_TEMPERATURE: "0"
-      OLLAMA_TOP_P: "0.9"
+      OLLAMA_FALLBACK_MODELS: "qwen2.5:7b,codellama,llama3"
+      OLLAMA_TEMPERATURE: "0.2"
+      OLLAMA_TOP_P: "0.8"
       OLLAMA_SEED: "42"
-      OLLAMA_TIMEOUT_SECONDS: "900"
+      OLLAMA_TIMEOUT_SECONDS: "600"
       BATCH_SIZE: "5"
-      MAX_UPLOAD_BYTES: "52428800"
-      MAX_FILE_BYTES: "20971520"
-      MAX_FILES_PER_JOB: "1200"
-      FILE_SNIPPET_CHARS: "40000"
+      MAX_UPLOAD_BYTES: "104857600"
+      MAX_FILE_BYTES: "52428800"
+      MAX_FILES_PER_JOB: "1500"
+      FILE_SNIPPET_CHARS: "30000"
       ANALYSIS_CACHE_TTL_SECONDS: "1800"
       ANALYSIS_CACHE_MAX_ITEMS: "256"
       CIRCUIT_BREAKER_FAILURE_THRESHOLD: "5"
       CIRCUIT_BREAKER_COOLDOWN_SECONDS: "30"
+      LLM_VALIDATION_RETRIES: "3"
+      RATE_LIMIT_WINDOW_SECONDS: "60"
+      RATE_LIMIT_MAX_REQUESTS: "20"
       JOB_STREAM_POLL_SECONDS: "15"
       JOB_STREAM_IDLE_TIMEOUT_SECONDS: "1800"
     volumes:
-      - ollama_data:/root/.ollama
+      - ollama_data:/home/appuser/.ollama
     deploy:
       resources:
         limits:

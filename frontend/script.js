@@ -35,15 +35,25 @@ const analysisCount = document.getElementById("analysisCount");
 const analysisOverall = document.getElementById("analysisOverall");
 
 const panes = {
-  explanation: {
-    pane:    document.getElementById("pane-explanation"),
-    empty:   document.getElementById("emptyExplanation"),
-    content: document.getElementById("explanation"),
+  overview: {
+    pane:    document.getElementById("pane-overview"),
+    empty:   document.getElementById("emptyOverview"),
+    content: document.getElementById("overview"),
   },
-  steps: {
-    pane:    document.getElementById("pane-steps"),
-    empty:   document.getElementById("emptySteps"),
-    content: document.getElementById("steps"),
+  flow: {
+    pane:    document.getElementById("pane-flow"),
+    empty:   document.getElementById("emptyFlow"),
+    content: document.getElementById("flowSteps"),
+  },
+  classes: {
+    pane:    document.getElementById("pane-classes"),
+    empty:   document.getElementById("emptyClasses"),
+    content: document.getElementById("classesWrap"),
+  },
+  logic: {
+    pane:    document.getElementById("pane-logic"),
+    empty:   document.getElementById("emptyLogic"),
+    content: document.getElementById("detailedLogic"),
   },
   diagram: {
     pane:    document.getElementById("pane-diagram"),
@@ -368,7 +378,7 @@ async function consumeStream(jobId, files) {
       try { msg = JSON.parse(ev.data); } catch { return; }
 
       if (msg.type === "progress") {
-        const { current, total: tot, message: progressMsg, batch_files } = msg;
+        const { current, total: tot, message: progressMsg } = msg;
         // Live progress bar (0–80%)
         const pct = Math.round((current / tot) * 80);
         progressBar.style.width = pct + "%";
@@ -433,26 +443,35 @@ try {
 }
 
 /* ── Render results ──────────────────────────────────────────────── */
-function renderResults({ explanation, steps, mermaid: mermaidText, security }) {
-  /* explanation */
-  const expEl = document.getElementById("explanation");
-  expEl.textContent = explanation || "No explanation returned.";
-  panes.explanation.empty.classList.add("hidden");
-  expEl.classList.remove("hidden");
+function renderResults({ overview, flow_steps, class_diagram, classes, detailed_logic, security_issues }) {
+  /* overview */
+  const overviewEl = document.getElementById("overview");
+  overviewEl.textContent = overview || "No overview returned.";
+  panes.overview.empty.classList.add("hidden");
+  overviewEl.classList.remove("hidden");
 
-  /* steps */
-  const stepsEl = document.getElementById("steps");
-  stepsEl.innerHTML = "";
-  (Array.isArray(steps) ? steps : []).forEach(step => {
+  /* flow steps */
+  const flowEl = document.getElementById("flowSteps");
+  flowEl.innerHTML = "";
+  (Array.isArray(flow_steps) ? flow_steps : []).forEach(step => {
     const li = document.createElement("li");
     li.textContent = step;
-    stepsEl.appendChild(li);
+    flowEl.appendChild(li);
   });
-  panes.steps.empty.classList.add("hidden");
-  stepsEl.classList.remove("hidden");
+  panes.flow.empty.classList.add("hidden");
+  flowEl.classList.remove("hidden");
+
+  /* classes */
+  renderClasses(Array.isArray(classes) ? classes : []);
+
+  /* detailed logic */
+  const logicEl = document.getElementById("detailedLogic");
+  logicEl.textContent = detailed_logic || "No detailed logic returned.";
+  panes.logic.empty.classList.add("hidden");
+  logicEl.classList.remove("hidden");
 
   /* diagram */
-  lastMermaidText = mermaidText || "";
+  lastMermaidText = class_diagram || "";
   const diagramWrap = document.getElementById("diagramWrap");
   const diagramEl   = document.getElementById("diagram");
   if (lastMermaidText) {
@@ -464,10 +483,55 @@ function renderResults({ explanation, steps, mermaid: mermaidText, security }) {
   }
 
   /* security */
-  renderSecurity(Array.isArray(security) ? security : []);
+  renderSecurity(Array.isArray(security_issues) ? security_issues : []);
 
-  /* switch to explanation tab */
-  document.querySelector(".rtab[data-pane='explanation']").click();
+  /* switch to overview tab */
+  document.querySelector(".rtab[data-pane='overview']").click();
+}
+
+/* ── Classes rendering ────────────────────────────────────────────── */
+function renderClasses(classes) {
+  const wrap  = document.getElementById("classesWrap");
+  const list  = document.getElementById("classesList");
+  const empty = document.getElementById("emptyClasses");
+
+  list.innerHTML = "";
+
+  if (!classes.length) {
+    empty.classList.remove("hidden");
+    wrap.classList.add("hidden");
+    return;
+  }
+
+  classes.forEach(cls => {
+    const card = document.createElement("div");
+    card.className = "class-card";
+
+    let methodsHtml = "";
+    if (cls.methods?.length) {
+      methodsHtml = `<div class="class-methods"><strong>Methods</strong><ul>${
+        cls.methods.map(m => `<li>${escapeHtml(m)}</li>`).join("")
+      }</ul></div>`;
+    }
+
+    let depsHtml = "";
+    if (cls.dependencies?.length) {
+      depsHtml = `<div class="class-deps"><strong>Dependencies</strong> ${
+        cls.dependencies.map(d => `<span class="dep-badge">${escapeHtml(d)}</span>`).join(" ")
+      }</div>`;
+    }
+
+    card.innerHTML =
+      `<div class="class-header">${escapeHtml(cls.name)}</div>` +
+      `<p class="class-purpose">${escapeHtml(cls.purpose)}</p>` +
+      methodsHtml +
+      depsHtml;
+
+    list.appendChild(card);
+  });
+
+  empty.classList.add("hidden");
+  wrap.classList.remove("hidden");
 }
 
 /* ── Security rendering ──────────────────────────────────────────── */

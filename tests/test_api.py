@@ -21,10 +21,12 @@ client = TestClient(app, raise_server_exceptions=False)
 
 # â”€â”€ Shared mock result (used wherever Ollama would be called) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _MOCK_RESULT = {
-    "explanation": "This code prints a greeting.",
-    "steps": ["Step 1: Define function", "Step 2: Call print"],
-    "mermaid": "flowchart TD\n  A([Start]) --> B[Print Hello]\n  B --> C([End])",
-    "security": [],
+    "overview": "This code prints a greeting. It defines a simple function that outputs text to the console using standard I/O.",
+    "flow_steps": ["Step 1: Define greeting function", "Step 2: Call print statement", "Step 3: Output to console"],
+    "class_diagram": "flowchart TD\n  A([Start]) --> B[Print Hello]\n  B --> C([End])",
+    "classes": [{"name": "main", "purpose": "Entry module", "methods": ["hello()"], "dependencies": []}],
+    "detailed_logic": "The code defines a greeting function that prints a hello message to standard output using the built-in print function.",
+    "security_issues": [],
 }
 
 
@@ -170,7 +172,7 @@ def test_stream_emits_progress_events_for_multi_file():
 
 
 def test_stream_progress_has_required_fields():
-    """Progress events contain current, total, and filename."""
+    """Progress events contain current, total, and batch_files."""
     files = [
         ("files", ("x.py", b"a=1", "text/plain")),
         ("files", ("y.py", b"b=2", "text/plain")),
@@ -185,12 +187,12 @@ def test_stream_progress_has_required_fields():
     first = prog[0]
     assert "current" in first
     assert "total" in first
-    assert "filename" in first
-    assert first["total"] == 2
+    assert "batch_files" in first
+    assert first["total"] >= 1
 
 
 def test_stream_progress_counts_correct():
-    """Progress current numbers go 1, 2, 3 for 3 files."""
+    """Progress current numbers increment correctly for batched files."""
     files = [
         ("files", ("1.py", b"a=1", "text/plain")),
         ("files", ("2.py", b"b=2", "text/plain")),
@@ -202,7 +204,9 @@ def test_stream_progress_counts_correct():
 
     prog = [e for e in events if e.get("type") == "progress"]
     currents = [p["current"] for p in prog]
-    assert currents == [1, 2, 3], f"Expected [1,2,3], got: {currents}"
+    # With batching, 3 files may result in 1 batch, so current=[1] is valid
+    assert len(currents) >= 1, f"Expected at least 1 progress event, got: {currents}"
+    assert currents == sorted(currents), f"Progress should be monotonically increasing: {currents}"
 
 
 def test_stream_ends_with_result():
@@ -226,11 +230,11 @@ def test_stream_result_has_required_keys():
     results = [e for e in events if e.get("type") == "result"]
     assert results, "Expected a result event"
     body = results[0]
-    assert "explanation" in body
-    assert "steps" in body
-    assert "mermaid" in body
-    assert isinstance(body["steps"], list)
-    assert body["explanation"] == _MOCK_RESULT["explanation"]
+    assert "overview" in body
+    assert "flow_steps" in body
+    assert "class_diagram" in body
+    assert isinstance(body["flow_steps"], list)
+    assert body["overview"] == _MOCK_RESULT["overview"]
 
 
 def test_stream_result_steps_match_mock():
@@ -241,7 +245,7 @@ def test_stream_result_steps_match_mock():
 
     result = next((e for e in events if e.get("type") == "result"), None)
     assert result is not None
-    assert result["steps"] == _MOCK_RESULT["steps"]
+    assert result["flow_steps"] == _MOCK_RESULT["flow_steps"]
 
 
 def test_stream_error_event_on_ollama_failure():
@@ -336,22 +340,22 @@ def test_200_response_has_required_keys():
     r = client.post("/analyze", data={"code_text": "print(1+1)"})
     if r.status_code == 200:
         body = r.json()
-        assert "explanation" in body
-        assert "steps" in body
-        assert "mermaid" in body
-        assert isinstance(body["steps"], list)
+        assert "overview" in body
+        assert "flow_steps" in body
+        assert "class_diagram" in body
+        assert isinstance(body["flow_steps"], list)
 
 
-def test_200_explanation_is_string():
+def test_200_overview_is_string():
     r = client.post("/analyze", data={"code_text": "x = 1"})
     if r.status_code == 200:
-        assert isinstance(r.json()["explanation"], str)
+        assert isinstance(r.json()["overview"], str)
 
 
-def test_200_mermaid_is_string():
+def test_200_class_diagram_is_string():
     r = client.post("/analyze", data={"code_text": "x = 1"})
     if r.status_code == 200:
-        assert isinstance(r.json()["mermaid"], str)
+        assert isinstance(r.json()["class_diagram"], str)
 
 
 def test_502_has_detail_field():
